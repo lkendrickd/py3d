@@ -1,5 +1,5 @@
 """
-Chunk system for world generation and rendering.
+Chunk system for world generation and rendering - FIXED VERSION.
 """
 import numpy as np
 from OpenGL.GL import *
@@ -17,6 +17,9 @@ class Chunk:
         self.vertex_count = 0
         self.needs_update = True
         
+        # FIX: Add flag to track if mesh build is queued
+        self.mesh_build_queued = False
+
         self.generate_terrain()
     
     def generate_terrain(self):
@@ -74,7 +77,7 @@ class Chunk:
         """Set block at local coordinates"""
         if 0 <= x < CHUNK_SIZE and 0 <= y < 64 and 0 <= z < CHUNK_SIZE:
             self.blocks[x, y, z] = block_type
-            self.dirty = True
+            self.needs_update = True  # FIX: Set flag instead of dirty
     
     def is_face_visible(self, x, y, z, face_dir):
         """Check if a face should be rendered (not occluded by adjacent block)"""
@@ -151,6 +154,21 @@ class Chunk:
     def build_mesh(self):
         """Build the mesh for this chunk"""
         from config.settings import BLOCK_COLORS
+
+        # FIX: Early return if OpenGL context is not ready
+        try:
+            # Test if we can generate arrays
+            if self.vao is None:
+                test_vao = glGenVertexArrays(1)
+                if test_vao == 0:
+                    print(f"Warning: Cannot create VAO for chunk ({self.x}, {self.z}) - OpenGL not ready")
+                    return
+                # Delete test VAO
+                glDeleteVertexArrays(1, [test_vao])
+        except Exception as e:
+            print(f"Warning: OpenGL not ready for chunk ({self.x}, {self.z}): {e}")
+            return
+
         vertices = []
         
         for x in range(CHUNK_SIZE):
@@ -191,11 +209,12 @@ class Chunk:
         
         if not vertices:
             self.vertex_count = 0
+            self.needs_update = False  # FIX: Mark as updated even if empty
             return
         
         # Convert to numpy array
         vertex_data = np.array(vertices, dtype=np.float32)
-        self.vertex_count = len(vertex_data)
+        self.vertex_count = len(vertices) // 9  # Number of vertices (9 floats per vertex)
         
         # Create VAO and VBO
         if self.vao is None:
@@ -226,25 +245,33 @@ class Chunk:
         glBindVertexArray(0)
         
         self.needs_update = False
+        self.mesh_build_queued = False  # FIX: Clear queued flag
     
     def render(self):
-        """Render this chunk"""
-        if self.needs_update:
-            self.build_mesh()
+        """FIX: Render this chunk without building mesh synchronously"""
+        # FIX: Don't build mesh during render - this should be done by WorldManager
+        # if self.needs_update:
+        #     self.build_mesh()  # REMOVED - This causes frame drops!
         
-        if self.vertex_count > 0:
+        # Only render if we have a built mesh
+        if self.vertex_count > 0 and self.vao is not None:
             glBindVertexArray(self.vao)
-            glDrawArrays(GL_TRIANGLES, 0, self.vertex_count)
+            glDrawArrays(GL_TRIANGLES, 0, self.vertex_count)  # vertex_count is already the number of vertices
             glBindVertexArray(0)
-        # Debug: print if chunk has no vertices (only once)
-        elif not hasattr(self, '_warned_empty'):
-            print(f"Warning: Chunk ({self.x}, {self.z}) has no vertices to render")
-            self._warned_empty = True
+        # Debug: print if chunk needs update but hasn't been built
+        elif self.needs_update and not hasattr(self, '_warned_needs_update'):
+            print(f"Info: Chunk ({self.x}, {self.z}) needs mesh build")
+            self._warned_needs_update = True
     
     def cleanup(self):
         """Clean up OpenGL resources"""
         if self.vao is not None:
-            glDeleteVertexArrays(1, [self.vao])
-            glDeleteBuffers(1, [self.vbo])
-            self.vao = None
-            self.vbo = None
+            try:
+                glDeleteVertexArrays(1, [self.vao])
+                glDeleteBuffers(1, [self.vbo])
+            except Exception as e:
+                print(f"Warning: Error cleaning up chunk ({self.x}, {self.z}): {e}")
+            finally:
+                self.vao = None
+                self.vbo = None
+                self.vertex_count = 0

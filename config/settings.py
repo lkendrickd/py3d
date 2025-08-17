@@ -1,5 +1,5 @@
 """
-Game settings and constants.
+Game settings and constants - FIXED VERSION.
 """
 import numpy as np
 import math
@@ -9,24 +9,30 @@ SCREEN_W, SCREEN_H = 1024, 768  # Default fallback
 
 # Voxel world parameters
 CHUNK_SIZE = 16
+
+# FIX: Better world height for performance
 WORLD_HEIGHT = 64
-RENDER_DISTANCE = 20  # Reduced from 24 to 20 for better performance
-PRELOAD_DISTANCE = 25  # Reduced from 30 to 25 for memory management
-UNLOAD_DISTANCE = 25   # Reduced from 35 to 25 for aggressive cleanup
+
+# FIX: More reasonable render distance
+RENDER_DISTANCE = 16  # Reduced from 20 - still gives good view distance
+
+# FIX: Separate and better tuned loading distances
+PRELOAD_DISTANCE = 20  # Slightly ahead of render distance
+UNLOAD_DISTANCE = 28   # FIX: Much larger buffer to prevent thrashing
 
 # Camera and rendering parameters
 FOV = math.radians(60)  # Field of view in radians
 NEAR_PLANE = 0.1
-FAR_PLANE = 1500.0  # Increased for longer render distance
+FAR_PLANE = 1000.0  # Good for 16 chunk render distance
 
 # Lighting settings
 LIGHT_DIRECTION = np.array([-0.3, -0.7, -0.2], dtype=np.float32)
 LIGHT_COLOR = np.array([1.0, 1.0, 0.9], dtype=np.float32)
 AMBIENT_COLOR = np.array([0.3, 0.3, 0.4], dtype=np.float32)
 
-# Fog settings
-FOG_START = 150.0  # Adjusted for longer render distance
-FOG_END = 600.0    # Adjusted for 24 chunk render distance
+# Fog settings - FIX: Adjusted for new render distance
+FOG_START = 120.0  # Start fog closer
+FOG_END = 400.0    # End fog at reasonable distance
 FOG_COLOR = np.array([0.5, 0.8, 1.0], dtype=np.float32)
 
 # Block types
@@ -61,6 +67,7 @@ layout(location = 2) in vec3 color;
 out vec3 fragColor;
 out vec3 fragNormal;
 out vec3 fragPos;
+out float fogDepth;
 
 uniform mat4 model;
 uniform mat4 view;
@@ -70,7 +77,11 @@ void main() {
     fragPos = vec3(model * vec4(position, 1.0));
     fragNormal = mat3(transpose(inverse(model))) * normal;
     fragColor = color;
-    gl_Position = projection * view * vec4(fragPos, 1.0);
+
+    vec4 viewPos = view * vec4(fragPos, 1.0);
+    fogDepth = -viewPos.z;
+
+    gl_Position = projection * viewPos;
 }
 """
 
@@ -79,6 +90,7 @@ FRAGMENT_SHADER = """
 in vec3 fragColor;
 in vec3 fragNormal;
 in vec3 fragPos;
+in float fogDepth;
 
 out vec4 outColor;
 
@@ -96,13 +108,14 @@ void main() {
     float diff = max(dot(norm, lightDirNorm), 0.0);
     vec3 diffuse = diff * fragColor;
     
-    // Simple fog effect for distance
-    float distance = length(viewPos - fragPos);
-    float fogFactor = exp(-distance * 0.02);
-    fogFactor = clamp(fogFactor, 0.0, 1.0);
+    // Improved fog for better depth perception
+    float fogStart = 120.0;
+    float fogEnd = 400.0;
+    float fogFactor = clamp((fogEnd - fogDepth) / (fogEnd - fogStart), 0.0, 1.0);
     
     vec3 result = ambient + diffuse;
-    result = mix(vec3(0.53, 0.81, 0.92), result, fogFactor); // Sky blue fog
+    vec3 fogColor = vec3(0.53, 0.81, 0.92); // Sky blue
+    result = mix(fogColor, result, fogFactor);
     
     outColor = vec4(result, 1.0);
 }

@@ -1,0 +1,57 @@
+2025-08-17 21:12:57,842 - INFO - Starting main function.
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5727:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+2025-08-17 21:12:57,968 - INFO - Pygame initialized.
+2025-08-17 21:12:57,968 - INFO - Detected native resolution: 1024x768
+2025-08-17 21:12:57,968 - INFO - OpenGL attributes set.
+2025-08-17 21:12:58,099 - INFO - Display mode set.
+2025-08-17 21:12:58,099 - INFO - Display caption set.
+2025-08-17 21:12:58,099 - INFO - Mouse grab set.
+2025-08-17 21:12:58,100 - INFO - OpenGL settings enabled.
+2025-08-17 21:12:58,136 - INFO - Shader created.
+2025-08-17 21:12:58,137 - INFO - Camera created.
+2025-08-17 21:12:58,140 - INFO - WorldManager created.
+2025-08-17 21:12:58,140 - INFO - Generating initial world...
+2025-08-17 21:12:59,090 - INFO - Initial world generated: 49 chunks
+2025-08-17 21:12:59,096 - INFO - Matrices created.
+2025-08-17 21:12:59,097 - INFO - Entering main loop.
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.11)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Starting 2 chunk generation threads...
+Chunk generation threads started successfully
+Pre-generating world around chunk (4, 4)...
+Phase 1: Loading immediate chunks synchronously...
+Phase 1 complete: 49 immediate chunks loaded
+Phase 2: Queuing chunks for background generation...
+Phase 2 complete: 240 chunks queued
+Initial setup: 49 immediate + 240 queued
+Traceback (most recent call last):
+  File "/app/main.py", line 204, in <module>
+    main()
+  File "/app/main.py", line 173, in main
+    world_manager.update(camera.position, camera.front)
+  File "/app/world/world_manager.py", line 375, in update
+    mesh_builds = self.process_mesh_builds()
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/world/world_manager.py", line 174, in process_mesh_builds
+    chunk.build_mesh()
+  File "/app/world/chunk.py", line 232, in build_mesh
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(0))
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/site-packages/OpenGL/latebind.py", line 63, in __call__
+    return self.wrapperFunction( self.baseFunction, *args, **named )
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/site-packages/OpenGL/GL/VERSION/GL_2_0.py", line 465, in glVertexAttribPointer
+    contextdata.setValue( key, array )
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/site-packages/OpenGL/contextdata.py", line 58, in setValue
+    context = getContext( context )
+              ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/site-packages/OpenGL/contextdata.py", line 40, in getContext
+    raise error.Error(
+OpenGL.error.Error: Attempt to retrieve context when no valid context
