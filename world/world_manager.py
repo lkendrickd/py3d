@@ -224,41 +224,26 @@ class WorldManager:
         return self.chunks.get((chunk_x, chunk_z))
     
     def load_initial_chunks(self, camera_position):
-        """Load initial chunks around camera position synchronously"""
+        """Queue all initial chunks for asynchronous generation."""
         player_chunk_x, player_chunk_z = self.get_chunk_coords(camera_position[0], camera_position[2])
-        print(f"Pre-generating world around chunk ({player_chunk_x}, {player_chunk_z})...")
+        print(f"Queuing initial world generation around chunk ({player_chunk_x}, {player_chunk_z})...")
         
-        immediate_radius = 3
-        chunks_loaded = 0
-        print("Phase 1: Loading and meshing immediate chunks synchronously...")
-        for dx in range(-immediate_radius, immediate_radius + 1):
-            for dz in range(-immediate_radius, immediate_radius + 1):
-                chunk_x, chunk_z = player_chunk_x + dx, player_chunk_z + dz
-                key = (chunk_x, chunk_z)
-                if key not in self.chunks:
-                    chunk = Chunk(chunk_x, chunk_z)
-                    vertex_data = chunk.build_mesh()
-                    chunk.upload_mesh(vertex_data)
-                    self.chunks[key] = chunk
-                    chunks_loaded += 1
-        print(f"Phase 1 complete: {chunks_loaded} immediate chunks loaded and meshed")
-        
-        print("Phase 2: Queuing nearby chunks for background generation...")
         chunks_queued = 0
-        for radius in range(immediate_radius + 1, PRELOAD_DISTANCE + 1):
-            for dx in range(-radius, radius + 1):
-                for dz in range(-radius, radius + 1):
-                    if max(abs(dx), abs(dz)) == radius:
-                        chunk_x, chunk_z = player_chunk_x + dx, player_chunk_z + dz
-                        priority = radius
-                        if self.request_chunk_generation(chunk_x, chunk_z, priority):
-                            chunks_queued += 1
+        # Queue the initial area with high priority
+        for dx in range(-PRELOAD_DISTANCE, PRELOAD_DISTANCE + 1):
+            for dz in range(-PRELOAD_DISTANCE, PRELOAD_DISTANCE + 1):
+                chunk_x, chunk_z = player_chunk_x + dx, player_chunk_z + dz
+
+                # Prioritize based on distance from the player
+                priority = math.sqrt(dx*dx + dz*dz)
+
+                if self.request_chunk_generation(chunk_x, chunk_z, priority):
+                    chunks_queued += 1
         
-        print(f"Phase 2 complete: {chunks_queued} chunks queued")
-        print(f"Initial setup: {chunks_loaded} immediate + {chunks_queued} queued")
+        print(f"Initial world queued: {chunks_queued} chunks")
         
         self.last_player_chunk = (player_chunk_x, player_chunk_z)
-        return chunks_loaded
+        return 0 # Return 0 as no chunks are loaded synchronously
     
     def unload_distant_chunks(self, player_chunk_x, player_chunk_z):
         """Queue distant chunks for cleanup"""
