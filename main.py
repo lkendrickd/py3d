@@ -34,7 +34,7 @@ def main():
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_COMPATIBILITY)
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
     pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
-    pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 1)  # Enable VSync
+    pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 1 if VSYNC else 0)
     
     # Set up display
     pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL)

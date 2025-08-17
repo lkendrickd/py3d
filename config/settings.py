@@ -25,6 +25,7 @@ PRELOAD_DISTANCE = 20  # Slightly ahead of render distance
 UNLOAD_DISTANCE = 28   # FIX: Much larger buffer to prevent thrashing
 
 # Camera and rendering parameters
+VSYNC = True  # Enable VSync
 FOV = math.radians(60)  # Field of view in radians
 NEAR_PLANE = 0.1
 FAR_PLANE = 1000.0  # Good for 16 chunk render distance
