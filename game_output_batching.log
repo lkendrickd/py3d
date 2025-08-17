@@ -1,0 +1,34 @@
+error: XDG_RUNTIME_DIR is invalid or not set in the environment.
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5727:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.11)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Detected native resolution: 1024x768
+Traceback (most recent call last):
+  File "/app/main.py", line 215, in <module>
+    main()
+  File "/app/main.py", line 60, in main
+    world_manager = WorldManager()
+                    ^^^^^^^^^^^^^^
+  File "/app/world/world_manager.py", line 20, in __init__
+    self.mesh_batch = MeshBatch()
+                      ^^^^^^^^^^^
+  File "/app/engine/mesh_batch.py", line 16, in __init__
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, self.vertex_size, ctypes.c_void_p(0))
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/site-packages/OpenGL/latebind.py", line 63, in __call__
+    return self.wrapperFunction( self.baseFunction, *args, **named )
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/site-packages/OpenGL/GL/VERSION/GL_2_0.py", line 465, in glVertexAttribPointer
+    contextdata.setValue( key, array )
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/site-packages/OpenGL/contextdata.py", line 58, in setValue
+    context = getContext( context )
+              ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/site-packages/OpenGL/contextdata.py", line 40, in getContext
+    raise error.Error(
+OpenGL.error.Error: Attempt to retrieve context when no valid context

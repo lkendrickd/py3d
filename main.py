@@ -179,29 +179,9 @@ def main():
         shader.set_vec3("viewPos", camera.position)
         shader.set_float("ambientStrength", 0.3)
 
-        # Get visible chunks and render them
-        visible_chunks = world_manager.get_visible_chunks(camera.position)
-        chunks_rendered = 0
-
-        # FIX: Always process some completed chunks to keep pipeline flowing
-        world_manager.process_completed_chunks()
-        world_manager.process_mesh_builds()
-
-        # FIX: Adaptive rendering based on performance
-        if low_fps_counter > 10:
-            max_chunks_to_render = min(len(visible_chunks), 150)  # Emergency mode
-        elif avg_fps < 30:
-            max_chunks_to_render = min(len(visible_chunks), 200)
-        elif avg_fps < 45:
-            max_chunks_to_render = min(len(visible_chunks), 300)
-        else:
-            max_chunks_to_render = len(visible_chunks)  # Render all visible
-
-        for i, chunk in enumerate(visible_chunks):
-            if i >= max_chunks_to_render:
-                break
-            chunk.render()
-            chunks_rendered += 1
+        # Render the world using the mesh batch
+        world_manager.render_world()
+        chunks_rendered = len(world_manager.chunks) # Approximate
 
         # Swap buffers
         pygame.display.flip()
