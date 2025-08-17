@@ -222,7 +222,6 @@ class WorldManager:
         print(f"Phase 2 complete: {chunks_queued} chunks queued for background generation")
         print(f"Total initial setup: {chunks_loaded} immediate + {chunks_queued} queued = {chunks_loaded + chunks_queued} chunks")
         
-        self.last_player_chunk = (player_chunk_x, player_chunk_z)
         return chunks_loaded
     
     def unload_distant_chunks(self, player_chunk_x, player_chunk_z):
