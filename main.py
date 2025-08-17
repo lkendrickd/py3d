@@ -118,7 +118,6 @@ def main():
         
         # Update world based on camera position (adaptive frequency)
         if frame_count % update_interval == 0:
-            print(f"Frame {frame_count}: Calling world_manager.update with camera position {camera.position}")
             world_manager.update(camera.position)
         
         # Force chunk cleanup every 60 frames regardless of movement
@@ -151,6 +150,11 @@ def main():
         
         # Get visible chunks and render them with adaptive performance optimization
         visible_chunks = world_manager.get_visible_chunks(camera.position)
+
+        # Sort chunks by distance from camera for prioritized rendering
+        player_chunk_pos = world_manager.get_chunk_coords(camera.position[0], camera.position[2])
+        visible_chunks.sort(key=lambda c: max(abs(c.x - player_chunk_pos[0]), abs(c.z - player_chunk_pos[1])))
+
         chunks_rendered = 0
         
         # Always process completed chunks with minimal impact
