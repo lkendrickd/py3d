@@ -8,7 +8,7 @@ import time
 import numpy as np
 from collections import defaultdict
 from world.chunk import Chunk
-from config.settings import CHUNK_SIZE, RENDER_DISTANCE, PRELOAD_DISTANCE, UNLOAD_DISTANCE
+from config.settings import CHUNK_SIZE, RENDER_DISTANCE, PRELOAD_DISTANCE, UNLOAD_DISTANCE, MAX_CHUNKS
 
 
 class WorldManager:
@@ -16,8 +16,7 @@ class WorldManager:
         self.chunks = {}  # Dictionary to store loaded chunks (x, z) -> Chunk
         self.last_player_chunk = (None, None)  # Last chunk position of player
 
-        # FIX: Reduce max chunks significantly for better performance
-        self.max_chunks = 400  # Much more reasonable limit
+        self.max_chunks = MAX_CHUNKS
         
         # Threading for chunk generation
         self.chunk_queue = queue.Queue()  # Queue for chunks to generate

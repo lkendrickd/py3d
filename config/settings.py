@@ -10,6 +10,10 @@ SCREEN_W, SCREEN_H = 1024, 768  # Default fallback
 # Voxel world parameters
 CHUNK_SIZE = 16
 
+# Maximum number of chunks to keep loaded (increase this to allow larger streamed worlds)
+# Increase carefully — higher values raise memory and mesh-build load.
+MAX_CHUNKS = 1200
+
 # FIX: Better world height for performance
 WORLD_HEIGHT = 64
 
