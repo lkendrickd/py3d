@@ -105,9 +105,9 @@ def main():
         # Adaptive update frequency based on performance
         update_interval = 15  # Default
         if avg_fps < 30:
-            update_interval = 30  # Slower updates if FPS is low
-            world_manager.frame_budget_ms = 1.0  # Reduce budget when struggling
-            world_manager.max_chunks_per_frame = 0  # Skip processing when struggling
+            update_interval = 25  # Slower updates, but still frequent
+            world_manager.frame_budget_ms = 1.5  # Slightly increased budget
+            world_manager.max_chunks_per_frame = 1  # Ensure at least one chunk can be processed
         elif avg_fps > 55:
             update_interval = 8   # Faster updates if FPS is excellent
             world_manager.frame_budget_ms = 4.0  # Increase budget significantly
