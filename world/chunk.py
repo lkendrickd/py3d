@@ -15,7 +15,6 @@ class Chunk:
         self.vao = None
         self.vbo = None
         self.vertex_count = 0
-        self.needs_update = True
         
         self.generate_terrain()
     
@@ -148,8 +147,8 @@ class Chunk:
             vertices.extend([x, y, z+1, *normal, *color])
             vertices.extend([x, y+1, z+1, *normal, *color])
     
-    def build_mesh(self):
-        """Build the mesh for this chunk"""
+    def generate_vertex_data(self):
+        """Calculates vertex data for the chunk mesh. No GL calls."""
         from config.settings import BLOCK_COLORS
         vertices = []
         
@@ -165,36 +164,30 @@ class Chunk:
                     world_z = self.z * CHUNK_SIZE + z
                     
                     # Check each face for visibility and add vertices
-                    # Top face (y+1)
                     if y == 64 - 1 or self.blocks[x, y + 1, z] == Block.AIR:
                         self.add_face(vertices, world_x, y, world_z, 'top', color)
-                    
-                    # Bottom face (y-1)
                     if y == 0 or self.blocks[x, y - 1, z] == Block.AIR:
                         self.add_face(vertices, world_x, y, world_z, 'bottom', color * 0.5)
-                    
-                    # Front face (z+1)
                     if z == CHUNK_SIZE - 1 or self.blocks[x, y, z + 1] == Block.AIR:
                         self.add_face(vertices, world_x, y, world_z, 'front', color * 0.8)
-                    
-                    # Back face (z-1)
                     if z == 0 or self.blocks[x, y, z - 1] == Block.AIR:
                         self.add_face(vertices, world_x, y, world_z, 'back', color * 0.8)
-                    
-                    # Right face (x+1)
                     if x == CHUNK_SIZE - 1 or self.blocks[x + 1, y, z] == Block.AIR:
                         self.add_face(vertices, world_x, y, world_z, 'right', color * 0.9)
-                    
-                    # Left face (x-1)
                     if x == 0 or self.blocks[x - 1, y, z] == Block.AIR:
                         self.add_face(vertices, world_x, y, world_z, 'left', color * 0.9)
-        
+
         if not vertices:
+            return None
+
+        return np.array(vertices, dtype=np.float32)
+
+    def create_gpu_buffers(self, vertex_data):
+        """Creates VAO and VBO from vertex data. Must be called on main thread."""
+        if vertex_data is None or vertex_data.size == 0:
             self.vertex_count = 0
             return
-        
-        # Convert to numpy array
-        vertex_data = np.array(vertices, dtype=np.float32)
+
         self.vertex_count = len(vertex_data)
         
         # Create VAO and VBO
@@ -202,22 +195,16 @@ class Chunk:
             self.vao = glGenVertexArrays(1)
             self.vbo = glGenBuffers(1)
         
-        # Bind VAO
+        # Bind and upload data
         glBindVertexArray(self.vao)
-        
-        # Bind and upload vertex data
         glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
         glBufferData(GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, GL_STATIC_DRAW)
         
-        # Position attribute (location 0)
+        # Attributes
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(0))
         glEnableVertexAttribArray(0)
-        
-        # Normal attribute (location 1)
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(3 * 4))
         glEnableVertexAttribArray(1)
-        
-        # Color attribute (location 2)
         glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(6 * 4))
         glEnableVertexAttribArray(2)
         
@@ -225,21 +212,12 @@ class Chunk:
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         glBindVertexArray(0)
         
-        self.needs_update = False
-    
     def render(self):
-        """Render this chunk"""
-        if self.needs_update:
-            self.build_mesh()
-        
-        if self.vertex_count > 0:
+        """Render this chunk if it has a VAO."""
+        if self.vertex_count > 0 and self.vao is not None:
             glBindVertexArray(self.vao)
             glDrawArrays(GL_TRIANGLES, 0, self.vertex_count)
             glBindVertexArray(0)
-        # Debug: print if chunk has no vertices (only once)
-        elif not hasattr(self, '_warned_empty'):
-            print(f"Warning: Chunk ({self.x}, {self.z}) has no vertices to render")
-            self._warned_empty = True
     
     def cleanup(self):
         """Clean up OpenGL resources"""

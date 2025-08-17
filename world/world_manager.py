@@ -65,13 +65,14 @@ class WorldManager:
                 
                 chunk_x, chunk_z = chunk_coords
                 
-                # Generate the chunk (this is the expensive operation)
+                # Generate the chunk and its vertex data
                 start_time = time.time()
                 chunk = Chunk(chunk_x, chunk_z)
+                vertex_data = chunk.generate_vertex_data()
                 generation_time = time.time() - start_time
-                
-                # Put completed chunk in the completed queue
-                self.completed_chunks.put((chunk_coords, chunk, generation_time))
+
+                # Put completed chunk and data in the completed queue
+                self.completed_chunks.put((chunk_coords, chunk, vertex_data, generation_time))
                 
                 # Remove from generating set
                 self.generating_chunks.discard(chunk_coords)
@@ -117,16 +118,17 @@ class WorldManager:
                 break
             
             try:
-                # Handle both old and new format for backward compatibility
-                result = self.completed_chunks.get_nowait()
-                if len(result) == 3:
-                    chunk_coords, chunk, generation_time = result
-                    total_generation_time += generation_time
-                else:
-                    chunk_coords, chunk = result
+                # Get the generated data from the queue
+                chunk_coords, chunk, vertex_data, generation_time = self.completed_chunks.get_nowait()
+
+                # Create GPU buffers on the main thread
+                if vertex_data is not None:
+                    chunk.create_gpu_buffers(vertex_data)
                 
+                # Add the finalized chunk to the world
                 self.chunks[chunk_coords] = chunk
                 chunks_added += 1
+                total_generation_time += generation_time
                 
                 # Update performance tracking
                 self.chunks_generated_this_frame += 1
