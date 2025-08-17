@@ -23,6 +23,9 @@ class WorldManager:
         self.generation_threads = []
         self.stop_generation = False
         
+        # GPU resource cleanup
+        self.cleanup_queue = queue.Queue()
+
         # Use multiple threads for better performance
         self.num_threads = min(6, max(3, threading.active_count()))  # 3-6 threads based on system
         
@@ -124,7 +127,7 @@ class WorldManager:
                 # Create GPU buffers on the main thread
                 if vertex_data is not None:
                     chunk.create_gpu_buffers(vertex_data)
-                
+
                 # Add the finalized chunk to the world
                 self.chunks[chunk_coords] = chunk
                 chunks_added += 1
@@ -227,30 +230,49 @@ class WorldManager:
         return chunks_loaded
     
     def unload_distant_chunks(self, player_chunk_x, player_chunk_z):
-        """Unload chunks that are too far from the player"""
+        """Unload chunks that are too far from the player by queueing their resources for cleanup."""
         chunks_to_remove = []
         
         for (chunk_x, chunk_z), chunk in self.chunks.items():
             distance = max(abs(chunk_x - player_chunk_x), abs(chunk_z - player_chunk_z))
-            if distance > UNLOAD_DISTANCE:  # Use the new unload distance
+            if distance > UNLOAD_DISTANCE:
                 chunks_to_remove.append((chunk_x, chunk_z))
         
-        # Clean up distant chunks
+        # Queue GPU resources for cleanup and remove chunk from world
         for key in chunks_to_remove:
-            chunk = self.chunks[key]
-            chunk.cleanup()
-            del self.chunks[key]
+            chunk = self.chunks.pop(key, None)
+            if chunk:
+                self.cleanup_queue.put(chunk.get_gpu_resources())
+                chunk.cleanup()  # Clear local references
         
         if chunks_to_remove:
-            print(f"Unloaded {len(chunks_to_remove)} chunks beyond {UNLOAD_DISTANCE} chunk distance")
-    
+            print(f"Queued {len(chunks_to_remove)} chunks for cleanup beyond {UNLOAD_DISTANCE} chunk distance")
+
+    def process_cleanup_queue(self):
+        """Process a few GPU resources from the cleanup queue each frame."""
+        from OpenGL.GL import glDeleteVertexArrays, glDeleteBuffers
+        max_deletions_per_frame = 10  # Limit deletions per frame to avoid stutter
+        for _ in range(max_deletions_per_frame):
+            if not self.cleanup_queue.empty():
+                try:
+                    vao, vbo = self.cleanup_queue.get_nowait()
+                    if vao:
+                        glDeleteVertexArrays(1, [vao])
+                    if vbo:
+                        glDeleteBuffers(1, [vbo])
+                except queue.Empty:
+                    break
+            else:
+                break
+
     def update(self, camera_position):
         """Update world based on camera position with performance optimization"""
         # Reset frame counter
         self.chunks_generated_this_frame = 0
         
-        # Process any completed chunks first (non-blocking)
+        # Process queues
         completed = self.process_completed_chunks()
+        self.process_cleanup_queue()
         
         # Get player's current chunk
         player_chunk_x, player_chunk_z = self.get_chunk_coords(camera_position[0], camera_position[2])
@@ -325,7 +347,23 @@ class WorldManager:
         for thread in self.generation_threads:
             thread.join(timeout=1.0)
         
-        # Clean up all chunks
+        # Queue all remaining chunks for cleanup
         for chunk in self.chunks.values():
+            self.cleanup_queue.put(chunk.get_gpu_resources())
             chunk.cleanup()
         self.chunks.clear()
+
+        # Process the entire cleanup queue
+        print("Processing final cleanup...")
+        while not self.cleanup_queue.empty():
+            try:
+                vao, vbo = self.cleanup_queue.get_nowait()
+                if vao:
+                    from OpenGL.GL import glDeleteVertexArrays
+                    glDeleteVertexArrays(1, [vao])
+                if vbo:
+                    from OpenGL.GL import glDeleteBuffers
+                    glDeleteBuffers(1, [vbo])
+            except queue.Empty:
+                break
+        print("Cleanup complete.")

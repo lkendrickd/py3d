@@ -219,10 +219,12 @@ class Chunk:
             glDrawArrays(GL_TRIANGLES, 0, self.vertex_count)
             glBindVertexArray(0)
     
+    def get_gpu_resources(self):
+        """Return VAO and VBO for cleanup."""
+        return self.vao, self.vbo
+
     def cleanup(self):
-        """Clean up OpenGL resources"""
-        if self.vao is not None:
-            glDeleteVertexArrays(1, [self.vao])
-            glDeleteBuffers(1, [self.vbo])
-            self.vao = None
-            self.vbo = None
+        """Clear references to GPU resources, preparing for queued deletion."""
+        self.vao = None
+        self.vbo = None
+        self.vertex_count = 0

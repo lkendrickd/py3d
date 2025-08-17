@@ -10,9 +10,9 @@ SCREEN_W, SCREEN_H = 1024, 768  # Default fallback
 # Voxel world parameters
 CHUNK_SIZE = 16
 WORLD_HEIGHT = 64
-RENDER_DISTANCE = 20  # Reduced from 24 to 20 for better performance
-PRELOAD_DISTANCE = 25  # Reduced from 30 to 25 for memory management
-UNLOAD_DISTANCE = 25   # Reduced from 35 to 25 for aggressive cleanup
+RENDER_DISTANCE = 40   # Doubled for a larger view distance
+PRELOAD_DISTANCE = 50  # Doubled for more aggressive pre-loading
+UNLOAD_DISTANCE = 50   # Doubled to keep more chunks in memory
 
 # Camera and rendering parameters
 FOV = math.radians(60)  # Field of view in radians
