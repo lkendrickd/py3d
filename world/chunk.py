@@ -152,22 +152,11 @@ class Chunk:
             vertices.extend([x, y+1, z+1, *normal, *color])
     
     def build_mesh(self):
-        """Build the mesh for this chunk"""
+        """
+        Build the mesh for this chunk. This is CPU-intensive and should be
+        run in a worker thread. It returns the vertex data.
+        """
         from config.settings import BLOCK_COLORS
-
-        # FIX: Early return if OpenGL context is not ready
-        try:
-            # Test if we can generate arrays
-            if self.vao is None:
-                test_vao = glGenVertexArrays(1)
-                if test_vao == 0:
-                    print(f"Warning: Cannot create VAO for chunk ({self.x}, {self.z}) - OpenGL not ready")
-                    return
-                # Delete test VAO
-                glDeleteVertexArrays(1, [test_vao])
-        except Exception as e:
-            print(f"Warning: OpenGL not ready for chunk ({self.x}, {self.z}): {e}")
-            return
 
         vertices = []
         
@@ -208,13 +197,21 @@ class Chunk:
                         self.add_face(vertices, world_x, y, world_z, 'left', color * 0.9)
         
         if not vertices:
+            return None
+
+        # Convert to numpy array and return
+        return np.array(vertices, dtype=np.float32)
+
+    def upload_mesh(self, vertex_data):
+        """
+        Uploads a pre-built mesh to the GPU. This should be run on the main thread.
+        """
+        if vertex_data is None or vertex_data.size == 0:
             self.vertex_count = 0
-            self.needs_update = False  # FIX: Mark as updated even if empty
+            self.needs_update = False
             return
-        
-        # Convert to numpy array
-        vertex_data = np.array(vertices, dtype=np.float32)
-        self.vertex_count = len(vertices) // 9  # Number of vertices (9 floats per vertex)
+
+        self.vertex_count = vertex_data.size // 9  # 9 floats per vertex
         
         # Create VAO and VBO
         if self.vao is None:
@@ -245,7 +242,7 @@ class Chunk:
         glBindVertexArray(0)
         
         self.needs_update = False
-        self.mesh_build_queued = False  # FIX: Clear queued flag
+        self.mesh_build_queued = False
     
     def render(self):
         """FIX: Render this chunk without building mesh synchronously"""

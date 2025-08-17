@@ -29,9 +29,9 @@ def main():
     print(f"Detected native resolution: {WINDOW_WIDTH}x{WINDOW_HEIGHT}")
 
     # Set OpenGL attributes before creating the display
-    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
-    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
-    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_COMPATIBILITY)
+    # pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3) # Removed for wider compatibility
+    # pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3) # Removed for wider compatibility
+    # pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_COMPATIBILITY) # Removed for wider compatibility
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
     pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
     pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 1 if VSYNC else 0)
@@ -109,7 +109,7 @@ def main():
                     print(f"\n=== Debug Stats ===")
                     print(f"Chunks loaded: {len(world_manager.chunks)}")
                     print(f"Chunks generating: {len(world_manager.generating_chunks)}")
-                    print(f"Mesh build queue: {world_manager.chunks_to_build_mesh.qsize()}")
+                    print(f"Completed queue: {world_manager.completed_chunks.qsize()}")
                     print(f"Cleanup queue: {len(world_manager.chunks_to_cleanup)}")
                     print(f"FPS: {fps:.1f} (avg: {avg_fps:.1f})")
                     print(f"Camera pos: {camera.position}")
@@ -129,19 +129,15 @@ def main():
         if low_fps_counter > 10:  # Consistently low FPS
             update_interval = 30
             world_manager.max_chunks_per_frame = 1
-            world_manager.max_mesh_builds_per_frame = 2
         elif avg_fps < 45:
             update_interval = 20
             world_manager.max_chunks_per_frame = 2
-            world_manager.max_mesh_builds_per_frame = 4
         elif avg_fps > 55:
             update_interval = 5
             world_manager.max_chunks_per_frame = 4
-            world_manager.max_mesh_builds_per_frame = 10
         else:
             update_interval = 10
             world_manager.max_chunks_per_frame = 3
-            world_manager.max_mesh_builds_per_frame = 8
         
         # FIX: Update world with camera direction for better prioritization
         if frame_count % update_interval == 0:
@@ -185,7 +181,6 @@ def main():
 
         # FIX: Always process some completed chunks to keep pipeline flowing
         world_manager.process_completed_chunks()
-        world_manager.process_mesh_builds()
 
         # FIX: Adaptive rendering based on performance
         if low_fps_counter > 10:
@@ -211,7 +206,7 @@ def main():
             active_threads = len([t for t in world_manager.generation_threads if t.is_alive()])
             queue_size = world_manager.chunk_queue.qsize() + world_manager.priority_queue.qsize()
             generating_count = len(world_manager.generating_chunks)
-            mesh_queue = world_manager.chunks_to_build_mesh.qsize()
+            completed_queue = world_manager.completed_chunks.qsize()
 
             # FIX: Show chunk limit warning
             chunk_warning = " [MAX!]" if len(world_manager.chunks) >= world_manager.max_chunks else ""
@@ -221,7 +216,7 @@ def main():
                 f"Chunks: {len(world_manager.chunks)}/{world_manager.max_chunks}{chunk_warning} | "
                 f"Visible: {chunks_rendered} | "
                 f"Gen: {generating_count} | "
-                f"Mesh: {mesh_queue} | "
+                f"Upload: {completed_queue} | "
                 f"Pos: ({camera.position[0]:.0f}, {camera.position[1]:.0f}, {camera.position[2]:.0f})"
             )
     
