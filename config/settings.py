@@ -12,7 +12,7 @@ CHUNK_SIZE = 16
 
 # Maximum number of chunks to keep loaded (increase this to allow larger streamed worlds)
 # Increase carefully — higher values raise memory and mesh-build load.
-MAX_CHUNKS = 1200
+MAX_CHUNKS = 1024
 
 # FIX: Better world height for performance
 WORLD_HEIGHT = 64
@@ -22,7 +22,7 @@ RENDER_DISTANCE = 16  # Reduced from 20 - still gives good view distance
 
 # FIX: Separate and better tuned loading distances
 PRELOAD_DISTANCE = 20  # Slightly ahead of render distance
-UNLOAD_DISTANCE = 28   # FIX: Much larger buffer to prevent thrashing
+UNLOAD_DISTANCE = 30   # Much larger buffer to prevent thrashing
 
 # Camera and rendering parameters
 VSYNC = True  # Enable VSync
