@@ -1,14 +1,10 @@
 """
 Main entry point for the 3D voxel world - FIXED VERSION.
 """
-import os
-os.environ['SDL_VIDEODRIVER'] = 'dummy'
 import pygame
 import numpy as np
 import ctypes
 import math
-import logging
-
 from OpenGL.GL import (
     GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_DEPTH_TEST, GL_CULL_FACE,
     GL_BACK, GL_CCW, GL_TRIANGLES, glEnable, glCullFace, glFrontFace,
@@ -21,24 +17,16 @@ from engine.camera import Camera
 from engine.math_utils import perspective
 from world.world_manager import WorldManager
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 
 def main():
-    logging.info("Starting main function.")
     # Initialize Pygame
     pygame.init()
-    logging.info("Pygame initialized.")
     
     # Auto-detect native resolution
-    try:
-        info = pygame.display.Info()
-        WINDOW_WIDTH = info.current_w
-        WINDOW_HEIGHT = info.current_h
-        logging.info(f"Detected native resolution: {WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-    except pygame.error as e:
-        logging.error(f"Could not get display info: {e}. Using default resolution.")
-        WINDOW_WIDTH, WINDOW_HEIGHT = 1280, 720
+    info = pygame.display.Info()
+    WINDOW_WIDTH = info.current_w
+    WINDOW_HEIGHT = info.current_h
+    print(f"Detected native resolution: {WINDOW_WIDTH}x{WINDOW_HEIGHT}")
 
     # Set OpenGL attributes before creating the display
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
@@ -47,63 +35,38 @@ def main():
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
     pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
     pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 1)  # Enable VSync
-    logging.info("OpenGL attributes set.")
     
     # Set up display
-    try:
-        pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL)
-        logging.info("Display mode set.")
-    except pygame.error as e:
-        logging.error(f"Failed to set display mode: {e}")
-        return
-
+    pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL)
     pygame.display.set_caption("GPU Voxel World")
-    logging.info("Display caption set.")
     
     # Lock cursor to window
-    try:
-        pygame.mouse.set_visible(False)
-        pygame.event.set_grab(True)
-        logging.info("Mouse grab set.")
-    except pygame.error as e:
-        logging.warning(f"Could not set mouse grab: {e}")
+    pygame.mouse.set_visible(False)
+    pygame.event.set_grab(True)
 
     # Enable depth testing and face culling
-    try:
-        glEnable(GL_DEPTH_TEST)
-        glEnable(GL_CULL_FACE)
-        glCullFace(GL_BACK)
-        glClearColor(0.53, 0.81, 0.92, 1.0)  # Sky blue
-        logging.info("OpenGL settings enabled.")
-    except Exception as e:
-        logging.error(f"Error setting OpenGL options: {e}")
-        return
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_CULL_FACE)
+    glCullFace(GL_BACK)
+    glClearColor(0.53, 0.81, 0.92, 1.0)  # Sky blue
     
     # Create shader program
-    try:
-        shader = Shader(VERTEX_SHADER, FRAGMENT_SHADER)
-        logging.info("Shader created.")
-    except Exception as e:
-        logging.error(f"Error creating shader: {e}")
-        return
+    shader = Shader(VERTEX_SHADER, FRAGMENT_SHADER)
 
     # Create camera
     camera = Camera()
-    logging.info("Camera created.")
     
     # Create world manager for dynamic chunk loading
     world_manager = WorldManager()
-    logging.info("WorldManager created.")
     
     # Load initial chunks around spawn point (small area first)
-    logging.info("Generating initial world...")
+    print("Generating initial world...")
     initial_chunks = world_manager.load_initial_chunks(camera.position)
-    logging.info(f"Initial world generated: {initial_chunks} chunks")
+    print(f"Initial world generated: {initial_chunks} chunks")
     
     # Matrices
     model = np.eye(4, dtype=np.float32)
     projection = perspective(math.radians(60), WINDOW_WIDTH / WINDOW_HEIGHT, 0.1, 1000.0)
-    logging.info("Matrices created.")
     
     # Main loop
     clock = pygame.time.Clock()
@@ -116,7 +79,6 @@ def main():
     low_fps_counter = 0
     last_chunk_count = 0
 
-    logging.info("Entering main loop.")
     while running:
         dt = clock.tick(target_fps) / 1000.0
         fps = clock.get_fps()
@@ -136,45 +98,66 @@ def main():
             low_fps_counter = max(0, low_fps_counter - 1)
 
         # Handle events
-        try:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        running = False
-                    # FIX: Add debug key to show stats
-                    elif event.key == pygame.K_F3:
-                        logging.info(f"\n=== Debug Stats ===")
-                        logging.info(f"Chunks loaded: {len(world_manager.chunks)}")
-                        logging.info(f"Chunks generating: {len(world_manager.generating_chunks)}")
-                        logging.info(f"Mesh build queue: {world_manager.chunks_to_build_mesh.qsize()}")
-                        logging.info(f"Cleanup queue: {len(world_manager.chunks_to_cleanup)}")
-                        logging.info(f"FPS: {fps:.1f} (avg: {avg_fps:.1f})")
-                        logging.info(f"Camera pos: {camera.position}")
-                        logging.info(f"Camera dir: {camera.front}")
-                        logging.info("==================\n")
-                elif event.type == pygame.MOUSEMOTION:
-                    dx, dy = event.rel
-                    camera.process_mouse(dx, dy)
-        except pygame.error as e:
-            logging.warning(f"Pygame event error: {e}")
-
+                # FIX: Add debug key to show stats
+                elif event.key == pygame.K_F3:
+                    print(f"\n=== Debug Stats ===")
+                    print(f"Chunks loaded: {len(world_manager.chunks)}")
+                    print(f"Chunks generating: {len(world_manager.generating_chunks)}")
+                    print(f"Mesh build queue: {world_manager.chunks_to_build_mesh.qsize()}")
+                    print(f"Cleanup queue: {len(world_manager.chunks_to_cleanup)}")
+                    print(f"FPS: {fps:.1f} (avg: {avg_fps:.1f})")
+                    print(f"Camera pos: {camera.position}")
+                    print(f"Camera dir: {camera.front}")
+                    print("==================\n")
+            elif event.type == pygame.MOUSEMOTION:
+                dx, dy = event.rel
+                camera.process_mouse(dx, dy)
 
         # Handle keyboard input
         keys = pygame.key.get_pressed()
         camera.process_keyboard(keys, dt)
         
         # FIX: Adaptive update frequency based on performance and chunk status
-        update_interval = 10
-        if low_fps_counter > 10: update_interval = 30
-        elif avg_fps < 45: update_interval = 20
-        elif avg_fps > 55: update_interval = 5
+        update_interval = 10  # Default
+
+        if low_fps_counter > 10:  # Consistently low FPS
+            update_interval = 30
+            world_manager.max_chunks_per_frame = 1
+            world_manager.max_mesh_builds_per_frame = 2
+        elif avg_fps < 45:
+            update_interval = 20
+            world_manager.max_chunks_per_frame = 2
+            world_manager.max_mesh_builds_per_frame = 4
+        elif avg_fps > 55:
+            update_interval = 5
+            world_manager.max_chunks_per_frame = 4
+            world_manager.max_mesh_builds_per_frame = 10
+        else:
+            update_interval = 10
+            world_manager.max_chunks_per_frame = 3
+            world_manager.max_mesh_builds_per_frame = 8
         
+        # FIX: Update world with camera direction for better prioritization
         if frame_count % update_interval == 0:
             world_manager.update(camera.position, camera.front)
         
+        # FIX: More aggressive chunk management when chunk count changes
+        current_chunk_count = len(world_manager.chunks)
+        if current_chunk_count != last_chunk_count:
+            if current_chunk_count > world_manager.max_chunks:
+                # Force immediate cleanup if over limit
+                excess = current_chunk_count - world_manager.max_chunks
+                world_manager.force_cleanup_furthest_chunks(excess + 20)
+            last_chunk_count = current_chunk_count
+
         # Clear screen
+        glClearColor(0.53, 0.81, 0.92, 1.0)  # Sky blue
         glClear(int(GL_COLOR_BUFFER_BIT) | int(GL_DEPTH_BUFFER_BIT))
         
         # Use shader
@@ -182,24 +165,70 @@ def main():
         
         # Set up matrices
         view_matrix = camera.get_view_matrix()
+        proj_matrix = projection
+
+        shader.set_mat4("model", model.flatten())
         shader.set_mat4("view", view_matrix.flatten())
-        shader.set_mat4("projection", projection.flatten())
+        shader.set_mat4("projection", proj_matrix.flatten())
         
-        # Render visible chunks
+        # Lighting
+        time_of_day = pygame.time.get_ticks() / 1000.0
+        sun_angle = time_of_day * 0.05
+        light_dir = np.array([math.sin(sun_angle), math.cos(sun_angle), 0.3], dtype=np.float32)
+        shader.set_vec3("lightDir", light_dir)
+        shader.set_vec3("viewPos", camera.position)
+        shader.set_float("ambientStrength", 0.3)
+
+        # Get visible chunks and render them
         visible_chunks = world_manager.get_visible_chunks(camera.position)
-        for chunk in visible_chunks:
+        chunks_rendered = 0
+
+        # FIX: Always process some completed chunks to keep pipeline flowing
+        world_manager.process_completed_chunks()
+        world_manager.process_mesh_builds()
+
+        # FIX: Adaptive rendering based on performance
+        if low_fps_counter > 10:
+            max_chunks_to_render = min(len(visible_chunks), 150)  # Emergency mode
+        elif avg_fps < 30:
+            max_chunks_to_render = min(len(visible_chunks), 200)
+        elif avg_fps < 45:
+            max_chunks_to_render = min(len(visible_chunks), 300)
+        else:
+            max_chunks_to_render = len(visible_chunks)  # Render all visible
+
+        for i, chunk in enumerate(visible_chunks):
+            if i >= max_chunks_to_render:
+                break
             chunk.render()
+            chunks_rendered += 1
 
         # Swap buffers
         pygame.display.flip()
 
-    logging.info("Exited main loop.")
+        # Enhanced window title with more info (update less frequently for performance)
+        if frame_count % 20 == 0:  # FIX: Update more frequently for better feedback
+            active_threads = len([t for t in world_manager.generation_threads if t.is_alive()])
+            queue_size = world_manager.chunk_queue.qsize() + world_manager.priority_queue.qsize()
+            generating_count = len(world_manager.generating_chunks)
+            mesh_queue = world_manager.chunks_to_build_mesh.qsize()
+
+            # FIX: Show chunk limit warning
+            chunk_warning = " [MAX!]" if len(world_manager.chunks) >= world_manager.max_chunks else ""
+
+            pygame.display.set_caption(
+                f"GPU Voxel World - FPS: {fps:.0f} (avg: {avg_fps:.0f}) | "
+                f"Chunks: {len(world_manager.chunks)}/{world_manager.max_chunks}{chunk_warning} | "
+                f"Visible: {chunks_rendered} | "
+                f"Gen: {generating_count} | "
+                f"Mesh: {mesh_queue} | "
+                f"Pos: ({camera.position[0]:.0f}, {camera.position[1]:.0f}, {camera.position[2]:.0f})"
+            )
     
     # Cleanup
-    logging.info("Shutting down...")
+    print("\nShutting down...")
     world_manager.cleanup()
     pygame.quit()
-    logging.info("Shutdown complete.")
 
 
 if __name__ == "__main__":
