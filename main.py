@@ -15,7 +15,7 @@ from config.settings import *
 from engine.shader import Shader
 from engine.camera import Camera
 from engine.math_utils import perspective
-from world.chunk import Chunk
+from world.world_manager import WorldManager
 
 
 def main():
@@ -34,6 +34,7 @@ def main():
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_COMPATIBILITY)
     pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
     pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
+    pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 1)  # Enable VSync
     
     # Set up display
     pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL)
@@ -55,14 +56,13 @@ def main():
     # Create camera
     camera = Camera()
     
-    # Create chunks
-    chunks = {}
-    for cx in range(RENDER_DISTANCE):
-        for cz in range(RENDER_DISTANCE):
-            chunk = Chunk(cx, cz)
-            chunks[(cx, cz)] = chunk
+    # Create world manager for dynamic chunk loading
+    world_manager = WorldManager()
     
-    print(f"World generated: {len(chunks)} chunks")
+    # Load initial chunks around spawn point (small area first)
+    print("Generating initial world...")
+    initial_chunks = world_manager.load_initial_chunks(camera.position)
+    print(f"Initial world generated: {initial_chunks} chunks")
     
     # Matrices
     model = np.eye(4, dtype=np.float32)
@@ -71,10 +71,21 @@ def main():
     # Main loop
     clock = pygame.time.Clock()
     running = True
+    frame_count = 0
+    fps_history = []
+    target_fps = 60
     
     while running:
-        dt = clock.tick(60) / 1000.0
+        dt = clock.tick(target_fps) / 1000.0
         fps = clock.get_fps()
+        frame_count += 1
+        
+        # Track FPS for adaptive performance
+        fps_history.append(fps)
+        if len(fps_history) > 60:  # Keep last 60 frames
+            fps_history.pop(0)
+        
+        avg_fps = sum(fps_history) / len(fps_history) if fps_history else 60
         
         # Handle events
         for event in pygame.event.get():
@@ -90,6 +101,29 @@ def main():
         # Handle keyboard input
         keys = pygame.key.get_pressed()
         camera.process_keyboard(keys, dt)
+        
+        # Adaptive update frequency based on performance
+        update_interval = 15  # Default
+        if avg_fps < 30:
+            update_interval = 30  # Slower updates if FPS is low
+            world_manager.frame_budget_ms = 1.0  # Reduce budget when struggling
+            world_manager.max_chunks_per_frame = 0  # Skip processing when struggling
+        elif avg_fps > 55:
+            update_interval = 8   # Faster updates if FPS is excellent
+            world_manager.frame_budget_ms = 4.0  # Increase budget significantly
+            world_manager.max_chunks_per_frame = 2  # Allow more aggressive processing
+        else:
+            world_manager.frame_budget_ms = 2.0  # Default budget
+            world_manager.max_chunks_per_frame = 1  # Normal processing
+        
+        # Update world based on camera position (adaptive frequency)
+        if frame_count % update_interval == 0:
+            world_manager.update(camera.position)
+        
+        # Force chunk cleanup every 60 frames regardless of movement
+        if frame_count % 60 == 0:
+            player_chunk_x, player_chunk_z = world_manager.get_chunk_coords(camera.position[0], camera.position[2])
+            world_manager.unload_distant_chunks(player_chunk_x, player_chunk_z)
         
         # Clear screen
         glClearColor(0.53, 0.81, 0.92, 1.0)  # Sky blue
@@ -114,15 +148,48 @@ def main():
         shader.set_vec3("viewPos", camera.position)
         shader.set_float("ambientStrength", 0.3)
         
-        # Render chunks
-        for chunk in chunks.values():
+        # Get visible chunks and render them with adaptive performance optimization
+        visible_chunks = world_manager.get_visible_chunks(camera.position)
+        chunks_rendered = 0
+        
+        # Always process completed chunks with minimal impact
+        completed_chunks = world_manager.process_completed_chunks()
+        
+        # Adaptive rendering based on FPS and recent chunk processing
+        if avg_fps < 30:
+            max_chunks_to_render = min(len(visible_chunks), 20)  # Very conservative
+        elif avg_fps < 45:
+            max_chunks_to_render = min(len(visible_chunks), 40)  # Moderate
+        else:
+            max_chunks_to_render = min(len(visible_chunks), 60)  # More reasonable maximum
+        
+        for i, chunk in enumerate(visible_chunks):
+            if i >= max_chunks_to_render:
+                break
             chunk.render()
+            chunks_rendered += 1
         
         # Swap buffers
         pygame.display.flip()
-        pygame.display.set_caption(f"GPU Voxel World - FPS: {fps:.0f} | Pos: ({camera.position[0]:.1f}, {camera.position[1]:.1f}, {camera.position[2]:.1f})")
+        
+        # Enhanced window title with more info (update less frequently for performance)
+        if frame_count % 30 == 0:  # Update title every 30 frames instead of every frame
+            active_threads = len([t for t in world_manager.generation_threads if t.is_alive()])
+            queue_size = world_manager.chunk_queue.qsize() + world_manager.priority_queue.qsize()
+            generating_count = len(world_manager.generating_chunks)
+            
+            pygame.display.set_caption(
+                f"GPU Voxel World - FPS: {fps:.0f} | "
+                f"Chunks: {len(world_manager.chunks)} | "
+                f"Rendered: {chunks_rendered} | "
+                f"Queue: {queue_size} | "
+                f"Generating: {generating_count} | "
+                f"Threads: {active_threads} | "
+                f"Pos: ({camera.position[0]:.1f}, {camera.position[1]:.1f}, {camera.position[2]:.1f})"
+            )
     
     # Cleanup
+    world_manager.cleanup()
     pygame.quit()
 
 

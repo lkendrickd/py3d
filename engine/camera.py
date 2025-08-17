@@ -10,7 +10,7 @@ from config.settings import CHUNK_SIZE, RENDER_DISTANCE
 
 class Camera:
     def __init__(self):
-        self.position = np.array([CHUNK_SIZE * RENDER_DISTANCE // 2, 35.0, CHUNK_SIZE * RENDER_DISTANCE // 2], dtype=np.float32)
+        self.position = np.array([64.0, 35.0, 64.0], dtype=np.float32)  # Better starting position
         self.yaw = -90.0
         self.pitch = 0.0
         self.speed = 15.0

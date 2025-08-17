@@ -236,11 +236,15 @@ class Chunk:
             glBindVertexArray(self.vao)
             glDrawArrays(GL_TRIANGLES, 0, self.vertex_count)
             glBindVertexArray(0)
+        # Debug: print if chunk has no vertices (only once)
+        elif not hasattr(self, '_warned_empty'):
+            print(f"Warning: Chunk ({self.x}, {self.z}) has no vertices to render")
+            self._warned_empty = True
     
     def cleanup(self):
         """Clean up OpenGL resources"""
-        if self.vao != 0:
+        if self.vao is not None:
             glDeleteVertexArrays(1, [self.vao])
             glDeleteBuffers(1, [self.vbo])
-            self.vao = 0
-            self.vbo = 0
+            self.vao = None
+            self.vbo = None

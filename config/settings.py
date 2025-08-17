@@ -10,12 +10,14 @@ SCREEN_W, SCREEN_H = 1024, 768  # Default fallback
 # Voxel world parameters
 CHUNK_SIZE = 16
 WORLD_HEIGHT = 64
-RENDER_DISTANCE = 8
+RENDER_DISTANCE = 20  # Reduced from 24 to 20 for better performance
+PRELOAD_DISTANCE = 25  # Reduced from 30 to 25 for memory management
+UNLOAD_DISTANCE = 25   # Reduced from 35 to 25 for aggressive cleanup
 
 # Camera and rendering parameters
 FOV = math.radians(60)  # Field of view in radians
 NEAR_PLANE = 0.1
-FAR_PLANE = 1000.0
+FAR_PLANE = 1500.0  # Increased for longer render distance
 
 # Lighting settings
 LIGHT_DIRECTION = np.array([-0.3, -0.7, -0.2], dtype=np.float32)
@@ -23,8 +25,8 @@ LIGHT_COLOR = np.array([1.0, 1.0, 0.9], dtype=np.float32)
 AMBIENT_COLOR = np.array([0.3, 0.3, 0.4], dtype=np.float32)
 
 # Fog settings
-FOG_START = 50.0
-FOG_END = 200.0
+FOG_START = 150.0  # Adjusted for longer render distance
+FOG_END = 600.0    # Adjusted for 24 chunk render distance
 FOG_COLOR = np.array([0.5, 0.8, 1.0], dtype=np.float32)
 
 # Block types
