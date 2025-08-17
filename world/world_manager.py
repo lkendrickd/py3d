@@ -313,11 +313,10 @@ class WorldManager:
         
         # Phase 2: Queue nearby chunks for background generation
         print("Phase 2: Queuing chunks for background generation...")
-        preload_radius = 8  # FIX: More reasonable preload radius
         chunks_queued = 0
         
         # Generate chunks in rings, prioritizing closer ones
-        for radius in range(immediate_radius + 1, preload_radius + 1):
+        for radius in range(immediate_radius + 1, PRELOAD_DISTANCE + 1):
             for dx in range(-radius, radius + 1):
                 for dz in range(-radius, radius + 1):
                     # Only generate chunks on the edge of this radius
@@ -414,7 +413,7 @@ class WorldManager:
                                 break
 
             # Second pass: fill in gaps around player
-            for radius in range(1, RENDER_DISTANCE):
+            for radius in range(1, PRELOAD_DISTANCE):
                 if chunks_requested >= max_requests_per_update:
                     break
                     
