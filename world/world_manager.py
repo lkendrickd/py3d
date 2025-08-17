@@ -1,10 +1,11 @@
 """
-World manager for dynamic chunk loading and unloading.
+World manager for dynamic chunk loading and unloading - FULLY FIXED VERSION.
 """
 import math
 import threading
 import queue
 import time
+import numpy as np
 from collections import defaultdict
 from world.chunk import Chunk
 from config.settings import CHUNK_SIZE, RENDER_DISTANCE, PRELOAD_DISTANCE, UNLOAD_DISTANCE
@@ -14,7 +15,9 @@ class WorldManager:
     def __init__(self):
         self.chunks = {}  # Dictionary to store loaded chunks (x, z) -> Chunk
         self.last_player_chunk = (None, None)  # Last chunk position of player
-        self.max_chunks = UNLOAD_DISTANCE * UNLOAD_DISTANCE * 4  # Memory limit based on unload distance
+        
+        # FIX: Reduce max chunks significantly for better performance
+        self.max_chunks = 400  # Much more reasonable limit
         
         # Threading for chunk generation
         self.chunk_queue = queue.Queue()  # Queue for chunks to generate
@@ -23,11 +26,8 @@ class WorldManager:
         self.generation_threads = []
         self.stop_generation = False
         
-        # GPU resource cleanup
-        self.cleanup_queue = queue.Queue()
-
         # Use multiple threads for better performance
-        self.num_threads = min(6, max(3, threading.active_count()))  # 3-6 threads based on system
+        self.num_threads = min(4, max(2, threading.active_count() // 2))  # 2-4 threads
         
         # Priority system for chunk generation
         self.priority_queue = queue.PriorityQueue()  # (priority, chunk_coords)
@@ -35,10 +35,27 @@ class WorldManager:
         
         # Performance tracking
         self.chunks_generated_this_frame = 0
-        self.max_chunks_per_frame = 1  # Base processing rate
-        self.frame_budget_ms = 2.0  # Maximum 2ms per frame for chunk processing
+        self.max_chunks_per_frame = 3  # FIX: Increased from 1
+        self.frame_budget_ms = 3.0  # FIX: Increased from 2ms
         self.last_process_time = 0
-        self.aggressive_preload = True  # Enable aggressive pre-loading
+        
+        # Deferred operations queues
+        self.chunks_to_cleanup = []  # FIX: Use list for batch cleanup
+        self.chunks_to_build_mesh = queue.Queue()  # Chunks needing mesh building
+        self.max_cleanups_per_frame = 5  # FIX: Increased
+        self.max_mesh_builds_per_frame = 8  # FIX: Significantly increased from 2
+        
+        # FIX: Track camera direction for prioritization
+        self.last_camera_direction = np.array([0, 0, -1], dtype=np.float32)
+        self.last_camera_position = np.array([0, 0, 0], dtype=np.float32)
+        
+        # FIX: Track chunk generation stats
+        self.chunks_in_view_direction = set()
+        self.generation_stats = {
+            'total_generated': 0,
+            'total_cleaned': 0,
+            'meshes_built': 0
+        }
         
         # Start chunk generation threads
         self.start_generation_threads()
@@ -62,94 +79,179 @@ class WorldManager:
                     try:
                         priority, chunk_coords = self.priority_queue.get(timeout=0.05)
                     except queue.Empty:
-                        chunk_coords = self.chunk_queue.get(timeout=0.05)
+                        try:
+                            chunk_coords = self.chunk_queue.get(timeout=0.05)
+                        except queue.Empty:
+                            continue
                 else:
                     chunk_coords = self.chunk_queue.get(timeout=0.1)
                 
                 chunk_x, chunk_z = chunk_coords
                 
-                # Generate the chunk and its vertex data
-                start_time = time.time()
+                # Skip if already exists (race condition check)
+                if chunk_coords in self.chunks:
+                    self.generating_chunks.discard(chunk_coords)
+                    continue
+                
+                # Generate the chunk (this is the expensive operation)
                 chunk = Chunk(chunk_x, chunk_z)
-                vertex_data = chunk.generate_vertex_data()
-                generation_time = time.time() - start_time
-
-                # Put completed chunk and data in the completed queue
-                self.completed_chunks.put((chunk_coords, chunk, vertex_data, generation_time))
+                chunk.needs_update = True
+                
+                # Put completed chunk in the completed queue
+                self.completed_chunks.put((chunk_coords, chunk))
                 
                 # Remove from generating set
                 self.generating_chunks.discard(chunk_coords)
-                
-                # Mark task as done (simplified approach)
-                try:
-                    self.chunk_queue.task_done()
-                except:
-                    try:
-                        self.priority_queue.task_done()
-                    except:
-                        pass
+                self.generation_stats['total_generated'] += 1
                 
             except queue.Empty:
-                continue  # Check stop condition and continue
+                continue
             except Exception as e:
                 print(f"Error generating chunk {chunk_coords}: {e}")
                 if chunk_coords is not None:
                     self.generating_chunks.discard(chunk_coords)
-                    # Try to mark task done for both queues
-                    try:
-                        self.chunk_queue.task_done()
-                    except:
-                        pass
-                    try:
-                        self.priority_queue.task_done()
-                    except:
-                        pass
     
     def process_completed_chunks(self):
         """Process completed chunks from the generation threads with time budget"""
-        import time
         start_time = time.time() * 1000  # Convert to milliseconds
         
         chunks_added = 0
-        total_generation_time = 0
+        max_chunks = self.max_chunks_per_frame
         
         # Process chunks but respect time budget
-        while chunks_added < self.max_chunks_per_frame:
+        while chunks_added < max_chunks:
             # Check if we've exceeded our time budget
             current_time = time.time() * 1000
             if current_time - start_time > self.frame_budget_ms:
                 break
             
             try:
-                # Get the generated data from the queue
-                chunk_coords, chunk, vertex_data, generation_time = self.completed_chunks.get_nowait()
-
-                # Create GPU buffers on the main thread
-                if vertex_data is not None:
-                    chunk.create_gpu_buffers(vertex_data)
-
-                # Add the finalized chunk to the world
-                self.chunks[chunk_coords] = chunk
-                chunks_added += 1
-                total_generation_time += generation_time
+                chunk_coords, chunk = self.completed_chunks.get_nowait()
                 
-                # Update performance tracking
+                # FIX: Check if we're at max capacity
+                if len(self.chunks) >= self.max_chunks:
+                    # Force cleanup of furthest chunks
+                    self.force_cleanup_furthest_chunks(5)
+                
+                self.chunks[chunk_coords] = chunk
+                
+                # Queue mesh building with priority for chunks in view direction
+                if chunk_coords in self.chunks_in_view_direction:
+                    # Put at front of queue (hacky but works)
+                    temp_queue = queue.Queue()
+                    temp_queue.put(chunk)
+                    while not self.chunks_to_build_mesh.empty():
+                        temp_queue.put(self.chunks_to_build_mesh.get())
+                    self.chunks_to_build_mesh = temp_queue
+                else:
+                    self.chunks_to_build_mesh.put(chunk)
+                
+                chunks_added += 1
                 self.chunks_generated_this_frame += 1
                 
             except queue.Empty:
                 break
         
-        # Track processing time for next frame
         self.last_process_time = time.time() * 1000 - start_time
-        
-        # Reduce logging frequency significantly
-        if chunks_added > 0 and total_generation_time > 0:
-            avg_time = total_generation_time / chunks_added
-            # Only log occasionally and when we have significant data
-            if chunks_added > 0 and len(self.chunks) % 50 == 0:  # Every 50 chunks
-                print(f"Processed {chunks_added} chunks (avg: {avg_time:.3f}s, budget: {self.last_process_time:.1f}ms)")
-        
         return chunks_added
+    
+    def process_mesh_builds(self):
+        """Process mesh builds more aggressively"""
+        builds_processed = 0
+        max_builds = self.max_mesh_builds_per_frame
+        
+        start_time = time.time() * 1000
+        time_budget = 5.0  # FIX: Increased budget for mesh building
+        
+        while builds_processed < max_builds:
+            # Check time budget
+            if time.time() * 1000 - start_time > time_budget:
+                break
+                
+            try:
+                chunk = self.chunks_to_build_mesh.get_nowait()
+                if chunk.needs_update:
+                    chunk.build_mesh()
+                    self.generation_stats['meshes_built'] += 1
+                builds_processed += 1
+            except queue.Empty:
+                break
+        
+        return builds_processed
+    
+    def process_chunk_cleanups(self):
+        """Process chunk cleanups in batches"""
+        if not self.chunks_to_cleanup:
+            return 0
+            
+        # FIX: Process multiple cleanups at once
+        cleanups_to_process = min(len(self.chunks_to_cleanup), self.max_cleanups_per_frame)
+        
+        for _ in range(cleanups_to_process):
+            if self.chunks_to_cleanup:
+                chunk = self.chunks_to_cleanup.pop(0)
+                chunk.cleanup()
+                self.generation_stats['total_cleaned'] += 1
+        
+        return cleanups_to_process
+    
+    def force_cleanup_furthest_chunks(self, count):
+        """FIX: Force cleanup of furthest chunks when at capacity"""
+        if not self.last_camera_position.any():
+            return
+            
+        player_chunk_x, player_chunk_z = self.get_chunk_coords(
+            self.last_camera_position[0], 
+            self.last_camera_position[2]
+        )
+        
+        # Calculate distances and sort
+        chunk_distances = []
+        for (chunk_x, chunk_z), chunk in self.chunks.items():
+            distance = max(abs(chunk_x - player_chunk_x), abs(chunk_z - player_chunk_z))
+            chunk_distances.append((distance, (chunk_x, chunk_z), chunk))
+        
+        # Sort by distance (furthest first)
+        chunk_distances.sort(reverse=True)
+        
+        # Remove furthest chunks
+        removed = 0
+        for distance, coords, chunk in chunk_distances[:count]:
+            if coords in self.chunks:
+                chunk.cleanup()
+                del self.chunks[coords]
+                removed += 1
+                self.generation_stats['total_cleaned'] += 1
+        
+        if removed > 0:
+            print(f"Force cleaned {removed} furthest chunks (capacity management)")
+    
+    def calculate_chunk_priority(self, chunk_x, chunk_z, player_chunk_x, player_chunk_z):
+        """FIX: Calculate priority based on distance AND view direction"""
+        dx = chunk_x - player_chunk_x
+        dz = chunk_z - player_chunk_z
+        
+        # Base distance priority
+        distance = math.sqrt(dx*dx + dz*dz)
+        
+        # Check if chunk is in view direction
+        if abs(self.last_camera_direction[0]) > 0.1 or abs(self.last_camera_direction[2]) > 0.1:
+            chunk_dir = np.array([dx, 0, dz], dtype=np.float32)
+            if np.linalg.norm(chunk_dir) > 0:
+                chunk_dir = chunk_dir / np.linalg.norm(chunk_dir)
+                
+                # Calculate dot product with camera direction
+                view_alignment = np.dot(chunk_dir, 
+                                       np.array([self.last_camera_direction[0], 0, self.last_camera_direction[2]]))
+                
+                # Prioritize chunks in front of camera
+                if view_alignment > 0.5:  # In front
+                    distance *= 0.5  # Higher priority (lower number)
+                    self.chunks_in_view_direction.add((chunk_x, chunk_z))
+                elif view_alignment < -0.5:  # Behind
+                    distance *= 2.0  # Lower priority
+        
+        return distance
     
     def request_chunk_generation(self, chunk_x, chunk_z, priority=None):
         """Request a chunk to be generated asynchronously with optional priority"""
@@ -159,10 +261,14 @@ class WorldManager:
         if chunk_coords in self.chunks or chunk_coords in self.generating_chunks:
             return False
         
+        # FIX: Don't generate if we're way over capacity
+        if len(self.chunks) + len(self.generating_chunks) > self.max_chunks * 1.2:
+            return False
+        
         # Add to generation queue
         self.generating_chunks.add(chunk_coords)
         
-        # Use priority queue if priority is specified and closer chunks get higher priority
+        # Use priority queue if priority is specified
         if priority is not None and self.use_priority_queue:
             self.priority_queue.put((priority, chunk_coords))
         else:
@@ -181,13 +287,13 @@ class WorldManager:
         return self.chunks.get(key, None)
     
     def load_initial_chunks(self, camera_position):
-        """Load initial chunks around camera position with aggressive pre-generation"""
+        """Load initial chunks around camera position"""
         player_chunk_x, player_chunk_z = self.get_chunk_coords(camera_position[0], camera_position[2])
         
         print(f"Pre-generating world around chunk ({player_chunk_x}, {player_chunk_z})...")
         
-        # Phase 1: Load immediate chunks synchronously (larger area for smoother experience)
-        immediate_radius = 2  # Increased from 1 to 2 for more immediate coverage
+        # Phase 1: Load immediate chunks synchronously
+        immediate_radius = 3  # FIX: Slightly larger for better initial experience
         chunks_loaded = 0
         
         print("Phase 1: Loading immediate chunks synchronously...")
@@ -199,20 +305,20 @@ class WorldManager:
                 
                 if key not in self.chunks:
                     # Load these initial chunks synchronously for immediate gameplay
-                    self.chunks[key] = Chunk(chunk_x, chunk_z)
+                    chunk = Chunk(chunk_x, chunk_z)
+                    chunk.build_mesh()  # Build mesh immediately for initial chunks
+                    self.chunks[key] = chunk
                     chunks_loaded += 1
         
         print(f"Phase 1 complete: {chunks_loaded} immediate chunks loaded")
         
-        # Phase 2: Queue up a substantial area for background generation
+        # Phase 2: Queue nearby chunks for background generation
         print("Phase 2: Queuing chunks for background generation...")
-        preload_radius = min(PRELOAD_DISTANCE // 3, 12)  # Increased from 8 to 12 chunks radius
+        preload_radius = 8  # FIX: More reasonable preload radius
         chunks_queued = 0
         
         # Generate chunks in rings, prioritizing closer ones
         for radius in range(immediate_radius + 1, preload_radius + 1):
-            ring_priority = radius  # Lower number = higher priority
-            
             for dx in range(-radius, radius + 1):
                 for dz in range(-radius, radius + 1):
                     # Only generate chunks on the edge of this radius
@@ -220,59 +326,56 @@ class WorldManager:
                         chunk_x = player_chunk_x + dx
                         chunk_z = player_chunk_z + dz
                         
-                        # Request generation with priority (closer = higher priority)
-                        if self.request_chunk_generation(chunk_x, chunk_z, ring_priority):
+                        priority = radius  # Closer = higher priority (lower number)
+                        if self.request_chunk_generation(chunk_x, chunk_z, priority):
                             chunks_queued += 1
         
-        print(f"Phase 2 complete: {chunks_queued} chunks queued for background generation")
-        print(f"Total initial setup: {chunks_loaded} immediate + {chunks_queued} queued = {chunks_loaded + chunks_queued} chunks")
+        print(f"Phase 2 complete: {chunks_queued} chunks queued")
+        print(f"Initial setup: {chunks_loaded} immediate + {chunks_queued} queued")
         
+        self.last_player_chunk = (player_chunk_x, player_chunk_z)
         return chunks_loaded
     
     def unload_distant_chunks(self, player_chunk_x, player_chunk_z):
-        """Unload chunks that are too far from the player by queueing their resources for cleanup."""
+        """Queue distant chunks for cleanup"""
         chunks_to_remove = []
+        
+        # FIX: Use a proper unload distance that's larger than render distance
+        actual_unload_distance = RENDER_DISTANCE + 8  # Give 8 chunk buffer
         
         for (chunk_x, chunk_z), chunk in self.chunks.items():
             distance = max(abs(chunk_x - player_chunk_x), abs(chunk_z - player_chunk_z))
-            if distance > UNLOAD_DISTANCE:
+            if distance > actual_unload_distance:
                 chunks_to_remove.append((chunk_x, chunk_z))
         
-        # Queue GPU resources for cleanup and remove chunk from world
+        # Queue chunks for cleanup
         for key in chunks_to_remove:
-            chunk = self.chunks.pop(key, None)
-            if chunk:
-                self.cleanup_queue.put(chunk.get_gpu_resources())
-                chunk.cleanup()  # Clear local references
+            chunk = self.chunks[key]
+            self.chunks_to_cleanup.append(chunk)
+            del self.chunks[key]
         
         if chunks_to_remove:
-            print(f"Queued {len(chunks_to_remove)} chunks for cleanup beyond {UNLOAD_DISTANCE} chunk distance")
-
-    def process_cleanup_queue(self):
-        """Process a few GPU resources from the cleanup queue each frame."""
-        from OpenGL.GL import glDeleteVertexArrays, glDeleteBuffers
-        max_deletions_per_frame = 10  # Limit deletions per frame to avoid stutter
-        for _ in range(max_deletions_per_frame):
-            if not self.cleanup_queue.empty():
-                try:
-                    vao, vbo = self.cleanup_queue.get_nowait()
-                    if vao:
-                        glDeleteVertexArrays(1, [vao])
-                    if vbo:
-                        glDeleteBuffers(1, [vbo])
-                except queue.Empty:
-                    break
-            else:
-                break
-
-    def update(self, camera_position):
-        """Update world based on camera position with performance optimization"""
+            print(f"Queued {len(chunks_to_remove)} chunks for cleanup (beyond distance {actual_unload_distance})")
+        
+        return len(chunks_to_remove)
+    
+    def update(self, camera_position, camera_front=None):
+        """Update world based on camera position and direction"""
+        # Update camera tracking
+        self.last_camera_position = np.array(camera_position, dtype=np.float32)
+        if camera_front is not None:
+            self.last_camera_direction = np.array(camera_front, dtype=np.float32)
+        
         # Reset frame counter
         self.chunks_generated_this_frame = 0
+        self.chunks_in_view_direction.clear()
         
-        # Process queues
+        # Process deferred operations
+        cleanups = self.process_chunk_cleanups()
+        mesh_builds = self.process_mesh_builds()
+        
+        # Process completed chunks
         completed = self.process_completed_chunks()
-        self.process_cleanup_queue()
         
         # Get player's current chunk
         player_chunk_x, player_chunk_z = self.get_chunk_coords(camera_position[0], camera_position[2])
@@ -282,59 +385,96 @@ class WorldManager:
             print(f"Player moved to chunk ({player_chunk_x}, {player_chunk_z})")
             self.last_player_chunk = (player_chunk_x, player_chunk_z)
             
-            # Request chunks around the player to be generated asynchronously with priority
+            # FIX: Request chunks with view direction priority
             chunks_requested = 0
-            max_requests_per_update = 12  # Increased from 8 to 12 for better coverage
+            max_requests_per_update = 20  # FIX: More aggressive loading
             
-            # Generate in expanding rings with priority (closer = higher priority)
-            for radius in range(1, RENDER_DISTANCE + 5):  # Slightly beyond render distance
+            # First pass: prioritize view direction
+            view_forward = self.last_camera_direction
+            for distance in range(1, RENDER_DISTANCE + 3):
+                if chunks_requested >= max_requests_per_update // 2:
+                    break
+                    
+                # Calculate chunk position in view direction
+                chunk_offset_x = int(view_forward[0] * distance)
+                chunk_offset_z = int(view_forward[2] * distance)
+                
+                # Check a cone in view direction
+                for dx in range(-distance//2, distance//2 + 1):
+                    for dz in range(-distance//2, distance//2 + 1):
+                        chunk_x = player_chunk_x + chunk_offset_x + dx
+                        chunk_z = player_chunk_z + chunk_offset_z + dz
+                        
+                        priority = self.calculate_chunk_priority(
+                            chunk_x, chunk_z, player_chunk_x, player_chunk_z
+                        )
+                        
+                        if self.request_chunk_generation(chunk_x, chunk_z, priority):
+                            chunks_requested += 1
+                            if chunks_requested >= max_requests_per_update // 2:
+                                break
+            
+            # Second pass: fill in gaps around player
+            for radius in range(1, RENDER_DISTANCE):
                 if chunks_requested >= max_requests_per_update:
                     break
-                
-                ring_priority = radius  # Lower number = higher priority
                     
                 for dx in range(-radius, radius + 1):
                     for dz in range(-radius, radius + 1):
                         if chunks_requested >= max_requests_per_update:
                             break
                             
-                        # Only load chunks on the border of this radius
                         if max(abs(dx), abs(dz)) == radius:
                             chunk_x = player_chunk_x + dx
                             chunk_z = player_chunk_z + dz
                             
-                            # Use priority for chunks within render distance
-                            priority = ring_priority if radius <= RENDER_DISTANCE else None
+                            priority = self.calculate_chunk_priority(
+                                chunk_x, chunk_z, player_chunk_x, player_chunk_z
+                            )
+                            
                             if self.request_chunk_generation(chunk_x, chunk_z, priority):
                                 chunks_requested += 1
             
             if chunks_requested > 0:
-                print(f"Requested {chunks_requested} new chunks for generation (with priority)")
+                print(f"Requested {chunks_requested} new chunks (view-aware priority)")
             
-            # Unload distant chunks to save memory (essential for performance!)
-            self.unload_distant_chunks(player_chunk_x, player_chunk_z)
+            # Unload distant chunks
+            unloaded = self.unload_distant_chunks(player_chunk_x, player_chunk_z)
             
-            print(f"Total chunks loaded: {len(self.chunks)}")
+            # FIX: Force cleanup if we have too many chunks
+            if len(self.chunks) > self.max_chunks:
+                over_limit = len(self.chunks) - self.max_chunks
+                self.force_cleanup_furthest_chunks(over_limit + 10)
+            
+            print(f"Chunks: {len(self.chunks)} loaded, {len(self.generating_chunks)} generating, "
+                  f"{self.chunks_to_build_mesh.qsize()} awaiting mesh")
         
-        # Always process completed chunks, even if player didn't move
-        elif completed > 0:
-            print(f"Processed {completed} background-generated chunks")
-            
-            # Unload distant chunks to save memory
-            self.unload_distant_chunks(player_chunk_x, player_chunk_z)
-            
-            print(f"Total chunks loaded: {len(self.chunks)}")
+        # Always show stats periodically
+        if completed > 0 or mesh_builds > 0 or cleanups > 0:
+            if completed > 0:
+                print(f"Processed {completed} generated chunks")
+            if mesh_builds > 0:
+                print(f"Built {mesh_builds} chunk meshes")
+            if cleanups > 0:
+                print(f"Cleaned {cleanups} chunks")
     
     def get_visible_chunks(self, camera_position):
-        """Get chunks that should be rendered"""
+        """Get chunks that should be rendered with basic frustum culling"""
         player_chunk_x, player_chunk_z = self.get_chunk_coords(camera_position[0], camera_position[2])
         
         visible_chunks = []
         for (chunk_x, chunk_z), chunk in self.chunks.items():
-            # Simple distance check - could be improved with frustum culling
+            # Distance check
             distance = max(abs(chunk_x - player_chunk_x), abs(chunk_z - player_chunk_z))
             if distance <= RENDER_DISTANCE:
-                visible_chunks.append(chunk)
+                # Only add chunks that have their mesh built
+                if not chunk.needs_update and chunk.vertex_count > 0:
+                    visible_chunks.append(chunk)
+        
+        # FIX: Sort by distance so closer chunks render first (better for depth testing)
+        visible_chunks.sort(key=lambda c: 
+            max(abs(c.x - player_chunk_x), abs(c.z - player_chunk_z))
+        )
         
         return visible_chunks
     
@@ -347,23 +487,16 @@ class WorldManager:
         for thread in self.generation_threads:
             thread.join(timeout=1.0)
         
-        # Queue all remaining chunks for cleanup
+        # Clean up all chunks
         for chunk in self.chunks.values():
-            self.cleanup_queue.put(chunk.get_gpu_resources())
             chunk.cleanup()
         self.chunks.clear()
-
-        # Process the entire cleanup queue
-        print("Processing final cleanup...")
-        while not self.cleanup_queue.empty():
-            try:
-                vao, vbo = self.cleanup_queue.get_nowait()
-                if vao:
-                    from OpenGL.GL import glDeleteVertexArrays
-                    glDeleteVertexArrays(1, [vao])
-                if vbo:
-                    from OpenGL.GL import glDeleteBuffers
-                    glDeleteBuffers(1, [vbo])
-            except queue.Empty:
-                break
-        print("Cleanup complete.")
+        
+        # Clear deferred operation queues
+        for chunk in self.chunks_to_cleanup:
+            chunk.cleanup()
+        self.chunks_to_cleanup.clear()
+        
+        print(f"Cleanup stats: Generated {self.generation_stats['total_generated']}, "
+              f"Cleaned {self.generation_stats['total_cleaned']}, "
+              f"Meshes built {self.generation_stats['meshes_built']}")

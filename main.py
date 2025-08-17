@@ -1,5 +1,5 @@
 """
-Main entry point for the 3D voxel world.
+Main entry point for the 3D voxel world - FIXED VERSION.
 """
 import pygame
 import numpy as np
@@ -75,6 +75,10 @@ def main():
     fps_history = []
     target_fps = 60
     
+    # FIX: Track performance metrics
+    low_fps_counter = 0
+    last_chunk_count = 0
+    
     while running:
         dt = clock.tick(target_fps) / 1000.0
         fps = clock.get_fps()
@@ -87,6 +91,12 @@ def main():
         
         avg_fps = sum(fps_history) / len(fps_history) if fps_history else 60
         
+        # FIX: Track low FPS occurrences
+        if fps < 30:
+            low_fps_counter += 1
+        else:
+            low_fps_counter = max(0, low_fps_counter - 1)
+        
         # Handle events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -94,6 +104,17 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
+                # FIX: Add debug key to show stats
+                elif event.key == pygame.K_F3:
+                    print(f"\n=== Debug Stats ===")
+                    print(f"Chunks loaded: {len(world_manager.chunks)}")
+                    print(f"Chunks generating: {len(world_manager.generating_chunks)}")
+                    print(f"Mesh build queue: {world_manager.chunks_to_build_mesh.qsize()}")
+                    print(f"Cleanup queue: {len(world_manager.chunks_to_cleanup)}")
+                    print(f"FPS: {fps:.1f} (avg: {avg_fps:.1f})")
+                    print(f"Camera pos: {camera.position}")
+                    print(f"Camera dir: {camera.front}")
+                    print("==================\n")
             elif event.type == pygame.MOUSEMOTION:
                 dx, dy = event.rel
                 camera.process_mouse(dx, dy)
@@ -102,28 +123,38 @@ def main():
         keys = pygame.key.get_pressed()
         camera.process_keyboard(keys, dt)
         
-        # Adaptive update frequency based on performance
-        update_interval = 15  # Default
-        if avg_fps < 30:
-            update_interval = 25  # Slower updates, but still frequent
-            world_manager.frame_budget_ms = 1.5  # Slightly increased budget
-            world_manager.max_chunks_per_frame = 1  # Ensure at least one chunk can be processed
+        # FIX: Adaptive update frequency based on performance and chunk status
+        update_interval = 10  # Default
+        
+        if low_fps_counter > 10:  # Consistently low FPS
+            update_interval = 30
+            world_manager.max_chunks_per_frame = 1
+            world_manager.max_mesh_builds_per_frame = 2
+        elif avg_fps < 45:
+            update_interval = 20
+            world_manager.max_chunks_per_frame = 2
+            world_manager.max_mesh_builds_per_frame = 4
         elif avg_fps > 55:
-            update_interval = 8   # Faster updates if FPS is excellent
-            world_manager.frame_budget_ms = 4.0  # Increase budget significantly
-            world_manager.max_chunks_per_frame = 2  # Allow more aggressive processing
+            update_interval = 5
+            world_manager.max_chunks_per_frame = 4
+            world_manager.max_mesh_builds_per_frame = 10
         else:
-            world_manager.frame_budget_ms = 2.0  # Default budget
-            world_manager.max_chunks_per_frame = 1  # Normal processing
+            update_interval = 10
+            world_manager.max_chunks_per_frame = 3
+            world_manager.max_mesh_builds_per_frame = 8
         
-        # Update world based on camera position (adaptive frequency)
+        # FIX: Update world with camera direction for better prioritization
         if frame_count % update_interval == 0:
-            world_manager.update(camera.position)
+            world_manager.update(camera.position, camera.front)
         
-        # Force chunk cleanup every 60 frames regardless of movement
-        if frame_count % 60 == 0:
-            player_chunk_x, player_chunk_z = world_manager.get_chunk_coords(camera.position[0], camera.position[2])
-            world_manager.unload_distant_chunks(player_chunk_x, player_chunk_z)
+        # FIX: More aggressive chunk management when chunk count changes
+        current_chunk_count = len(world_manager.chunks)
+        if current_chunk_count != last_chunk_count:
+            if current_chunk_count > world_manager.max_chunks:
+                # Force immediate cleanup if over limit
+                excess = current_chunk_count - world_manager.max_chunks
+                world_manager.force_cleanup_furthest_chunks(excess + 20)
+            last_chunk_count = current_chunk_count
         
         # Clear screen
         glClearColor(0.53, 0.81, 0.92, 1.0)  # Sky blue
@@ -148,25 +179,23 @@ def main():
         shader.set_vec3("viewPos", camera.position)
         shader.set_float("ambientStrength", 0.3)
         
-        # Get visible chunks and render them with adaptive performance optimization
+        # Get visible chunks and render them
         visible_chunks = world_manager.get_visible_chunks(camera.position)
-
-        # Sort chunks by distance from camera for prioritized rendering
-        player_chunk_pos = world_manager.get_chunk_coords(camera.position[0], camera.position[2])
-        visible_chunks.sort(key=lambda c: max(abs(c.x - player_chunk_pos[0]), abs(c.z - player_chunk_pos[1])))
-
         chunks_rendered = 0
         
-        # Always process completed chunks with minimal impact
-        completed_chunks = world_manager.process_completed_chunks()
+        # FIX: Always process some completed chunks to keep pipeline flowing
+        world_manager.process_completed_chunks()
+        world_manager.process_mesh_builds()
         
-        # Adaptive rendering based on FPS and recent chunk processing
-        if avg_fps < 30:
-            max_chunks_to_render = min(len(visible_chunks), 20)  # Very conservative
+        # FIX: Adaptive rendering based on performance
+        if low_fps_counter > 10:
+            max_chunks_to_render = min(len(visible_chunks), 100)  # Emergency mode
+        elif avg_fps < 30:
+            max_chunks_to_render = min(len(visible_chunks), 150)
         elif avg_fps < 45:
-            max_chunks_to_render = min(len(visible_chunks), 40)  # Moderate
+            max_chunks_to_render = min(len(visible_chunks), 200)
         else:
-            max_chunks_to_render = min(len(visible_chunks), 60)  # More reasonable maximum
+            max_chunks_to_render = len(visible_chunks)  # Render all visible
         
         for i, chunk in enumerate(visible_chunks):
             if i >= max_chunks_to_render:
@@ -178,22 +207,26 @@ def main():
         pygame.display.flip()
         
         # Enhanced window title with more info (update less frequently for performance)
-        if frame_count % 30 == 0:  # Update title every 30 frames instead of every frame
+        if frame_count % 20 == 0:  # FIX: Update more frequently for better feedback
             active_threads = len([t for t in world_manager.generation_threads if t.is_alive()])
             queue_size = world_manager.chunk_queue.qsize() + world_manager.priority_queue.qsize()
             generating_count = len(world_manager.generating_chunks)
+            mesh_queue = world_manager.chunks_to_build_mesh.qsize()
+            
+            # FIX: Show chunk limit warning
+            chunk_warning = " [MAX!]" if len(world_manager.chunks) >= world_manager.max_chunks else ""
             
             pygame.display.set_caption(
-                f"GPU Voxel World - FPS: {fps:.0f} | "
-                f"Chunks: {len(world_manager.chunks)} | "
-                f"Rendered: {chunks_rendered} | "
-                f"Queue: {queue_size} | "
-                f"Generating: {generating_count} | "
-                f"Threads: {active_threads} | "
-                f"Pos: ({camera.position[0]:.1f}, {camera.position[1]:.1f}, {camera.position[2]:.1f})"
+                f"GPU Voxel World - FPS: {fps:.0f} (avg: {avg_fps:.0f}) | "
+                f"Chunks: {len(world_manager.chunks)}/{world_manager.max_chunks}{chunk_warning} | "
+                f"Visible: {chunks_rendered} | "
+                f"Gen: {generating_count} | "
+                f"Mesh: {mesh_queue} | "
+                f"Pos: ({camera.position[0]:.0f}, {camera.position[1]:.0f}, {camera.position[2]:.0f})"
             )
     
     # Cleanup
+    print("\nShutting down...")
     world_manager.cleanup()
     pygame.quit()
 
