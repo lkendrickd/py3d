@@ -118,6 +118,7 @@ def main():
         
         # Update world based on camera position (adaptive frequency)
         if frame_count % update_interval == 0:
+            print(f"Frame {frame_count}: Calling world_manager.update with camera position {camera.position}")
             world_manager.update(camera.position)
         
         # Force chunk cleanup every 60 frames regardless of movement

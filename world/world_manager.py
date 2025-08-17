@@ -252,6 +252,7 @@ class WorldManager:
         
         # Get player's current chunk
         player_chunk_x, player_chunk_z = self.get_chunk_coords(camera_position[0], camera_position[2])
+        print(f"Updating world. Current chunk: ({player_chunk_x}, {player_chunk_z}), Last chunk: {self.last_player_chunk}")
         
         # Check if player moved to a different chunk
         if (player_chunk_x, player_chunk_z) != self.last_player_chunk:
