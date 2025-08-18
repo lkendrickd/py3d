@@ -58,7 +58,8 @@ class Shader:
     
     def set_mat4(self, name, matrix):
         location = glGetUniformLocation(self.program, name)
-        glUniformMatrix4fv(location, 1, GL_FALSE, matrix)
+        # Set GL_TRUE to transpose the matrix from NumPy's row-major to OpenGL's column-major format
+        glUniformMatrix4fv(location, 1, GL_TRUE, matrix)
     
     def set_vec3(self, name, vector):
         location = glGetUniformLocation(self.program, name)
