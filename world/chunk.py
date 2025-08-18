@@ -112,15 +112,15 @@ class Chunk:
         if direction in faces:
             c1, c2, c3, c4, normal = faces[direction]
 
-            # Triangle 1: c1, c2, c3
+            # Triangle 1: c1, c3, c2 (Reversed from c1, c2, c3)
             vertices.extend([*c1, *normal, *color])
+            vertices.extend([*c3, *normal, *color])
             vertices.extend([*c2, *normal, *color])
-            vertices.extend([*c3, *normal, *color])
 
-            # Triangle 2: c1, c3, c4
+            # Triangle 2: c1, c4, c3 (Reversed from c1, c3, c4)
             vertices.extend([*c1, *normal, *color])
-            vertices.extend([*c3, *normal, *color])
             vertices.extend([*c4, *normal, *color])
+            vertices.extend([*c3, *normal, *color])
     
     def build_mesh(self):
         """Build the mesh for this chunk"""
