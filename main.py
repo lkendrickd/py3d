@@ -46,7 +46,7 @@ def main():
 
     # Enable depth testing and face culling
     glEnable(GL_DEPTH_TEST)
-    glEnable(GL_CULL_FACE)
+    #glEnable(GL_CULL_FACE) # Temporarily disabled for debugging
     glCullFace(GL_BACK)
     glClearColor(0.53, 0.81, 0.92, 1.0)  # Sky blue
     
