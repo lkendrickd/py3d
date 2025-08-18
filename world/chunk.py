@@ -89,67 +89,38 @@ class Chunk:
         return adjacent_block == Block.AIR
     
     def add_face(self, vertices, x, y, z, direction, color):
-        """Add a face (2 triangles) to the vertex list"""
-        if direction == 'top':
-            normal = [0, 1, 0]
-            # Triangle 1
-            vertices.extend([x, y+1, z, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-            vertices.extend([x+1, y+1, z, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y+1, z, *normal, *color])
-            vertices.extend([x, y+1, z+1, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-        elif direction == 'bottom':
-            normal = [0, -1, 0]
-            # Triangle 1
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x+1, y, z, *normal, *color])
-            vertices.extend([x+1, y, z+1, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x+1, y, z+1, *normal, *color])
-            vertices.extend([x, y, z+1, *normal, *color])
-        elif direction == 'front':
-            normal = [0, 0, 1]
-            # Triangle 1
-            vertices.extend([x, y, z+1, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-            vertices.extend([x, y+1, z+1, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y, z+1, *normal, *color])
-            vertices.extend([x+1, y, z+1, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-        elif direction == 'back':
-            normal = [0, 0, -1]
-            # Triangle 1
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x, y+1, z, *normal, *color])
-            vertices.extend([x+1, y+1, z, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x+1, y+1, z, *normal, *color])
-            vertices.extend([x+1, y, z, *normal, *color])
-        elif direction == 'right':
-            normal = [1, 0, 0]
-            # Triangle 1
-            vertices.extend([x+1, y, z, *normal, *color])
-            vertices.extend([x+1, y+1, z, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-            # Triangle 2
-            vertices.extend([x+1, y, z, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-            vertices.extend([x+1, y, z+1, *normal, *color])
-        else:  # left
-            normal = [-1, 0, 0]
-            # Triangle 1
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x, y+1, z+1, *normal, *color])
-            vertices.extend([x, y+1, z, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x, y, z+1, *normal, *color])
-            vertices.extend([x, y+1, z+1, *normal, *color])
+        """Add a face (2 triangles) to the vertex list with correct winding order."""
+
+        # Define the 8 corners of the block
+        p = [
+            (x, y, z), (x+1, y, z), (x+1, y+1, z), (x, y+1, z),
+            (x, y, z+1), (x+1, y, z+1), (x+1, y+1, z+1), (x, y+1, z+1)
+        ]
+
+        # Define faces by the corners they use
+        # Each face is (c1, c2, c3, c4, normal)
+        # Corners are specified in CCW order when looking at the face from outside
+        faces = {
+            'top':    (p[3], p[2], p[6], p[7], (0, 1, 0)),
+            'bottom': (p[0], p[4], p[5], p[1], (0, -1, 0)),
+            'front':  (p[4], p[7], p[6], p[5], (0, 0, 1)),
+            'back':   (p[0], p[1], p[2], p[3], (0, 0, -1)),
+            'right':  (p[1], p[5], p[6], p[2], (1, 0, 0)),
+            'left':   (p[0], p[3], p[7], p[4], (-1, 0, 0))
+        }
+
+        if direction in faces:
+            c1, c2, c3, c4, normal = faces[direction]
+
+            # Triangle 1: c1, c2, c3
+            vertices.extend([*c1, *normal, *color])
+            vertices.extend([*c2, *normal, *color])
+            vertices.extend([*c3, *normal, *color])
+
+            # Triangle 2: c1, c3, c4
+            vertices.extend([*c1, *normal, *color])
+            vertices.extend([*c3, *normal, *color])
+            vertices.extend([*c4, *normal, *color])
     
     def build_mesh(self):
         """Build the mesh for this chunk"""
