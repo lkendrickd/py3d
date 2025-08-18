@@ -79,7 +79,33 @@ class Chunk:
             self.blocks[x, y, z] = block_type
             self.needs_update = True  # FIX: Set flag instead of dirty
     
-    def _generate_face_mask(self, mask, axis, slice_idx, direction):
+    def _world_get_block(self, world_manager, x, y, z):
+        """Get a block from the world, crossing chunk boundaries if necessary."""
+        if 0 <= x < CHUNK_SIZE and 0 <= y < 64 and 0 <= z < CHUNK_SIZE:
+            return self.blocks[x, y, z]
+
+        # It's in another chunk. Calculate world coordinates.
+        world_x = self.x * CHUNK_SIZE + x
+        world_y = y
+        world_z = self.z * CHUNK_SIZE + z
+
+        # Find the other chunk's coordinates
+        other_chunk_x = int(math.floor(world_x / CHUNK_SIZE))
+        other_chunk_z = int(math.floor(world_z / CHUNK_SIZE))
+
+        # Get the other chunk from the world manager
+        other_chunk = world_manager.get_chunk(other_chunk_x, other_chunk_z)
+
+        if other_chunk is None:
+            return Block.AIR # If neighbor isn't loaded, assume it's air
+
+        # Get local coords within the other chunk
+        local_x = world_x % CHUNK_SIZE
+        local_z = world_z % CHUNK_SIZE
+
+        return other_chunk.blocks[int(local_x), int(world_y), int(local_z)]
+
+    def _generate_face_mask(self, mask, axis, slice_idx, direction, world_manager):
         """
         Generate a 2D mask for a slice of the chunk.
         The mask contains the block type for each visible face on that slice.
@@ -99,20 +125,15 @@ class Chunk:
                 coords_here[u_axis] = u
                 coords_here[v_axis] = v
 
-                block_here = self.get_block(*coords_here)
-
-                # If the current block is air, its face is not visible
-                if block_here == Block.AIR:
-                    mask[u, v] = 0
-                    continue
-
                 # Determine the coordinates of the adjacent block
                 coords_there = list(coords_here)
                 coords_there[axis] += direction
-                block_there = self.get_block(*coords_there)
 
-                # A face is visible if the adjacent block is air (or out of bounds)
-                if block_there == Block.AIR:
+                block_here = self._world_get_block(world_manager, *coords_here)
+                block_there = self._world_get_block(world_manager, *coords_there)
+
+                # A face is visible if one block is solid and the other is transparent.
+                if block_here != Block.AIR and block_there == Block.AIR:
                     mask[u, v] = block_here
                 else:
                     mask[u, v] = 0
@@ -246,7 +267,7 @@ class Chunk:
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         glBindVertexArray(0)
 
-    def build_mesh(self):
+    def build_mesh(self, world_manager):
         """Build the mesh for this chunk using a greedy meshing algorithm."""
         
         # Ensure OpenGL context is available
@@ -281,7 +302,7 @@ class Chunk:
                 # Scan along the current axis
                 for slice_idx in range(dims[axis]):
                     # Generate the 2D mask for this slice
-                    self._generate_face_mask(mask, axis, slice_idx, direction)
+                    self._generate_face_mask(mask, axis, slice_idx, direction, world_manager)
 
                     # Greedy mesh the mask to generate quads
                     quads.extend(self._mesh_mask(mask, axis, slice_idx, direction))

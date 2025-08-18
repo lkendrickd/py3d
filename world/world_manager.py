@@ -170,7 +170,7 @@ class WorldManager:
             try:
                 chunk = self.chunks_to_build_mesh.get_nowait()
                 if chunk.needs_update:
-                    chunk.build_mesh()
+                    chunk.build_mesh(self)
                     self.generation_stats['meshes_built'] += 1
                 builds_processed += 1
             except queue.Empty:
