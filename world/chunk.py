@@ -198,7 +198,7 @@ class Chunk:
             normal = [0, 0, 0]
             normal[axis] = direction
 
-            base_color = BLOCK_COLORS.get(block_type, (1, 0, 1))
+            base_color = BLOCK_COLORS[block_type]
             modifier = color_modifiers.get((axis, direction), 1.0)
             color = np.array(base_color, dtype=np.float32) * modifier
 
