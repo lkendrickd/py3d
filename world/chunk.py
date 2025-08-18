@@ -135,7 +135,8 @@ class Chunk:
                             quad_verts = [v1, v2, v3, v4]
                             if direction == -1: quad_verts = [quad_verts[0], quad_verts[3], quad_verts[2], quad_verts[1]]
 
-                            color = BLOCK_COLORS[block_type]
+                            # Make a copy of the color so we don't modify the global array
+                            color = BLOCK_COLORS[block_type].copy()
                             if normal[1] == -1: color *= 0.5
                             elif normal[2] != 0: color *= 0.8
                             elif normal[0] != 0: color *= 0.9
