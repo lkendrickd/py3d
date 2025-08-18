@@ -79,144 +79,217 @@ class Chunk:
             self.blocks[x, y, z] = block_type
             self.needs_update = True  # FIX: Set flag instead of dirty
     
-    def is_face_visible(self, x, y, z, face_dir):
-        """Check if a face should be rendered (not occluded by adjacent block)"""
-        dx, dy, dz = face_dir
-        adj_x, adj_y, adj_z = x + dx, y + dy, z + dz
+    def _generate_face_mask(self, mask, axis, slice_idx, direction):
+        """
+        Generate a 2D mask for a slice of the chunk.
+        The mask contains the block type for each visible face on that slice.
+        """
+        dims = (CHUNK_SIZE, 64, CHUNK_SIZE)
+        u_axis = (axis + 1) % 3
+        v_axis = (axis + 2) % 3
+
+        u_dim = dims[u_axis]
+        v_dim = dims[v_axis]
+
+        for u in range(u_dim):
+            for v in range(v_dim):
+                # Map 2D mask coords (u, v) and slice_idx back to 3D chunk coords (x, y, z)
+                coords_here = [0, 0, 0]
+                coords_here[axis] = slice_idx
+                coords_here[u_axis] = u
+                coords_here[v_axis] = v
+
+                block_here = self.get_block(*coords_here)
+
+                # If the current block is air, its face is not visible
+                if block_here == Block.AIR:
+                    mask[u, v] = 0
+                    continue
+
+                # Determine the coordinates of the adjacent block
+                coords_there = list(coords_here)
+                coords_there[axis] += direction
+                block_there = self.get_block(*coords_there)
+
+                # A face is visible if the adjacent block is air (or out of bounds)
+                if block_there == Block.AIR:
+                    mask[u, v] = block_here
+                else:
+                    mask[u, v] = 0
+
+    def _mesh_mask(self, mask, axis, slice_idx, direction):
+        """
+        Applies the greedy meshing algorithm to a 2D mask.
+        Returns a list of quads (rectangles) that cover the mask.
+        """
+        quads = []
+        height, width = mask.shape
+
+        for u in range(height):
+            for v in range(width):
+                # If this face has already been processed or is empty, skip it
+                if mask[u, v] == 0:
+                    continue
+
+                current_block_type = mask[u, v]
+
+                # Find the width of the quad
+                quad_width = 1
+                while v + quad_width < width and mask[u, v + quad_width] == current_block_type:
+                    quad_width += 1
+
+                # Find the height of the quad
+                quad_height = 1
+                can_expand_height = True
+                while u + quad_height < height and can_expand_height:
+                    # Check if the entire row below is of the same block type
+                    for i in range(quad_width):
+                        if mask[u + quad_height, v + i] != current_block_type:
+                            can_expand_height = False
+                            break
+
+                    if can_expand_height:
+                        quad_height += 1
+
+                # Add the quad to our list
+                quad = {
+                    "pos": (u, v),
+                    "size": (quad_height, quad_width),
+                    "block_type": current_block_type,
+                    "axis": axis,
+                    "slice_idx": slice_idx,
+                    "direction": direction
+                }
+                quads.append(quad)
+
+                # Zero out the mask for the area covered by this quad
+                mask[u:u + quad_height, v:v + quad_width] = 0
         
-        # Check adjacent block
-        adjacent_block = self.get_block(adj_x, adj_y, adj_z)
-        return adjacent_block == Block.AIR
-    
-    def add_face(self, vertices, x, y, z, direction, color):
-        """Add a face (2 triangles) to the vertex list with correct winding order."""
+        return quads
 
-        # Define the 8 corners of the block
-        p = [
-            (x, y, z), (x+1, y, z), (x+1, y+1, z), (x, y+1, z),
-            (x, y, z+1), (x+1, y, z+1), (x+1, y+1, z+1), (x, y+1, z+1)
-        ]
+    def _build_vertex_buffer_from_quads(self, quads):
+        """Build the final vertex buffer from a list of optimized quads."""
+        from config.settings import BLOCK_COLORS
+        import ctypes
 
-        # Define faces by the corners they use
-        # Each face is (c1, c2, c3, c4, normal)
-        # Corners are specified in CCW order when looking at the face from outside
-        faces = {
-            'top':    (p[3], p[2], p[6], p[7], (0, 1, 0)),
-            'bottom': (p[0], p[4], p[5], p[1], (0, -1, 0)),
-            'front':  (p[4], p[7], p[6], p[5], (0, 0, 1)),
-            'back':   (p[0], p[1], p[2], p[3], (0, 0, -1)),
-            'right':  (p[1], p[5], p[6], p[2], (1, 0, 0)),
-            'left':   (p[0], p[3], p[7], p[4], (-1, 0, 0))
+        if not quads:
+            self.vertex_count = 0
+            if self.vao is not None:
+                glDeleteVertexArrays(1, [self.vao])
+                glDeleteBuffers(1, [self.vbo])
+                self.vao, self.vbo = None, None
+            return
+
+        vertices = []
+        chunk_offset = np.array([self.x * CHUNK_SIZE, 0, self.z * CHUNK_SIZE], dtype=np.float32)
+
+        color_modifiers = {
+            (0, 1): 0.9, (0, -1): 0.9,  # right/left
+            (1, 1): 1.0, (1, -1): 0.5,  # top/bottom
+            (2, 1): 0.8, (2, -1): 0.8,  # front/back
         }
 
-        if direction in faces:
-            c1, c2, c3, c4, normal = faces[direction]
+        for quad in quads:
+            u, v = quad["pos"]
+            h, w = quad["size"]
+            axis, slice_idx, direction = quad["axis"], quad["slice_idx"], quad["direction"]
+            block_type = quad["block_type"]
 
-            # Triangle 1: c1, c3, c2 (Reversed from c1, c2, c3)
+            normal = [0, 0, 0]
+            normal[axis] = direction
+
+            base_color = BLOCK_COLORS.get(block_type, (1, 0, 1))
+            modifier = color_modifiers.get((axis, direction), 1.0)
+            color = np.array(base_color, dtype=np.float32) * modifier
+
+            u_axis, v_axis = (axis + 1) % 3, (axis + 2) % 3
+
+            p0 = [0, 0, 0]
+            p0[axis] = slice_idx + (1 if direction > 0 else 0)
+            p0[u_axis], p0[v_axis] = u, v
+
+            du, dv = [0, 0, 0], [0, 0, 0]
+            du[u_axis], dv[v_axis] = h, w
+
+            p0, du, dv = np.array(p0, dtype=np.float32), np.array(du, dtype=np.float32), np.array(dv, dtype=np.float32)
+            p0 += chunk_offset
+
+            c1, c2, c3, c4 = p0, p0 + dv, p0 + dv + du, p0 + du
+
             vertices.extend([*c1, *normal, *color])
             vertices.extend([*c3, *normal, *color])
             vertices.extend([*c2, *normal, *color])
 
-            # Triangle 2: c1, c4, c3 (Reversed from c1, c3, c4)
             vertices.extend([*c1, *normal, *color])
             vertices.extend([*c4, *normal, *color])
             vertices.extend([*c3, *normal, *color])
-    
-    def build_mesh(self):
-        """Build the mesh for this chunk"""
-        from config.settings import BLOCK_COLORS
 
-        # FIX: Early return if OpenGL context is not ready
+        vertex_data = np.array(vertices, dtype=np.float32)
+        self.vertex_count = len(vertex_data) // 9
+        
+        if self.vao is None:
+            self.vao = glGenVertexArrays(1)
+            self.vbo = glGenBuffers(1)
+        
+        glBindVertexArray(self.vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, GL_STATIC_DRAW)
+        
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(3 * 4))
+        glEnableVertexAttribArray(1)
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(6 * 4))
+        glEnableVertexAttribArray(2)
+        
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+
+    def build_mesh(self):
+        """Build the mesh for this chunk using a greedy meshing algorithm."""
+        
+        # Ensure OpenGL context is available
         try:
-            # Test if we can generate arrays
             if self.vao is None:
                 test_vao = glGenVertexArrays(1)
                 if test_vao == 0:
                     print(f"Warning: Cannot create VAO for chunk ({self.x}, {self.z}) - OpenGL not ready")
                     return
-                # Delete test VAO
                 glDeleteVertexArrays(1, [test_vao])
         except Exception as e:
             print(f"Warning: OpenGL not ready for chunk ({self.x}, {self.z}): {e}")
             return
 
-        vertices = []
-        
-        for x in range(CHUNK_SIZE):
-            for y in range(64):
-                for z in range(CHUNK_SIZE):
-                    if self.blocks[x, y, z] == Block.AIR:
-                        continue
-                    
-                    block_type = self.blocks[x, y, z]
-                    color = BLOCK_COLORS[block_type]
-                    world_x = self.x * CHUNK_SIZE + x
-                    world_z = self.z * CHUNK_SIZE + z
-                    
-                    # Check each face for visibility and add vertices
-                    # Top face (y+1)
-                    if y == 64 - 1 or self.blocks[x, y + 1, z] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'top', color)
-                    
-                    # Bottom face (y-1)
-                    if y == 0 or self.blocks[x, y - 1, z] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'bottom', color * 0.5)
-                    
-                    # Front face (z+1)
-                    if z == CHUNK_SIZE - 1 or self.blocks[x, y, z + 1] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'front', color * 0.8)
-                    
-                    # Back face (z-1)
-                    if z == 0 or self.blocks[x, y, z - 1] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'back', color * 0.8)
-                    
-                    # Right face (x+1)
-                    if x == CHUNK_SIZE - 1 or self.blocks[x + 1, y, z] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'right', color * 0.9)
-                    
-                    # Left face (x-1)
-                    if x == 0 or self.blocks[x - 1, y, z] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'left', color * 0.9)
-        
-        if not vertices:
-            self.vertex_count = 0
-            self.needs_update = False  # FIX: Mark as updated even if empty
-            return
-        
-        # Convert to numpy array
-        vertex_data = np.array(vertices, dtype=np.float32)
-        self.vertex_count = len(vertices) // 9  # Number of vertices (9 floats per vertex)
-        
-        # Create VAO and VBO
-        if self.vao is None:
-            self.vao = glGenVertexArrays(1)
-            self.vbo = glGenBuffers(1)
-        
-        # Bind VAO
-        glBindVertexArray(self.vao)
-        
-        # Bind and upload vertex data
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        glBufferData(GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, GL_STATIC_DRAW)
-        
-        # Position attribute (location 0)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(0))
-        glEnableVertexAttribArray(0)
-        
-        # Normal attribute (location 1)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(3 * 4))
-        glEnableVertexAttribArray(1)
-        
-        # Color attribute (location 2)
-        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(6 * 4))
-        glEnableVertexAttribArray(2)
-        
-        # Unbind
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
-        glBindVertexArray(0)
-        
+        quads = []
+
+        # Dimensions of the chunk - assuming CHUNK_SIZE x 64 x CHUNK_SIZE
+        dims = (CHUNK_SIZE, 64, CHUNK_SIZE)
+
+        # Process each axis (X, Y, Z)
+        for axis in range(3):
+            # Process both directions (+ and -)
+            for direction in [-1, 1]:
+
+                # Define the two axes perpendicular to the current slicing axis
+                u_axis = (axis + 1) % 3
+                v_axis = (axis + 2) % 3
+
+                # Create a 2D mask for this slice direction
+                mask = np.zeros((dims[u_axis], dims[v_axis]), dtype=np.int32)
+
+                # Scan along the current axis
+                for slice_idx in range(dims[axis]):
+                    # Generate the 2D mask for this slice
+                    self._generate_face_mask(mask, axis, slice_idx, direction)
+
+                    # Greedy mesh the mask to generate quads
+                    quads.extend(self._mesh_mask(mask, axis, slice_idx, direction))
+
+        # Build the final vertex buffer from the list of quads
+        self._build_vertex_buffer_from_quads(quads)
+
         self.needs_update = False
-        self.mesh_build_queued = False  # FIX: Clear queued flag
+        self.mesh_build_queued = False
     
     def render(self):
         """FIX: Render this chunk without building mesh synchronously"""
