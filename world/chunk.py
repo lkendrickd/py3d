@@ -12,13 +12,8 @@ class Chunk:
         self.x = x
         self.z = z
         self.blocks = np.zeros((CHUNK_SIZE, 64, CHUNK_SIZE), dtype=np.uint8)
-        self.vao = None
-        self.vbo = None
-        self.vertex_count = 0
+        self.mesh_data = None
         self.needs_update = True
-        
-        # FIX: Add flag to track if mesh build is queued
-        self.mesh_build_queued = False
 
         self.generate_terrain()
     
@@ -79,199 +74,91 @@ class Chunk:
             self.blocks[x, y, z] = block_type
             self.needs_update = True  # FIX: Set flag instead of dirty
     
-    def is_face_visible(self, x, y, z, face_dir):
-        """Check if a face should be rendered (not occluded by adjacent block)"""
-        dx, dy, dz = face_dir
-        adj_x, adj_y, adj_z = x + dx, y + dy, z + dz
-        
-        # Check adjacent block
-        adjacent_block = self.get_block(adj_x, adj_y, adj_z)
-        return adjacent_block == Block.AIR
-    
-    def add_face(self, vertices, x, y, z, direction, color):
-        """Add a face (2 triangles) to the vertex list"""
-        if direction == 'top':
-            normal = [0, 1, 0]
-            # Triangle 1
-            vertices.extend([x, y+1, z, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-            vertices.extend([x+1, y+1, z, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y+1, z, *normal, *color])
-            vertices.extend([x, y+1, z+1, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-        elif direction == 'bottom':
-            normal = [0, -1, 0]
-            # Triangle 1
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x+1, y, z, *normal, *color])
-            vertices.extend([x+1, y, z+1, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x+1, y, z+1, *normal, *color])
-            vertices.extend([x, y, z+1, *normal, *color])
-        elif direction == 'front':
-            normal = [0, 0, 1]
-            # Triangle 1
-            vertices.extend([x, y, z+1, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-            vertices.extend([x, y+1, z+1, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y, z+1, *normal, *color])
-            vertices.extend([x+1, y, z+1, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-        elif direction == 'back':
-            normal = [0, 0, -1]
-            # Triangle 1
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x, y+1, z, *normal, *color])
-            vertices.extend([x+1, y+1, z, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x+1, y+1, z, *normal, *color])
-            vertices.extend([x+1, y, z, *normal, *color])
-        elif direction == 'right':
-            normal = [1, 0, 0]
-            # Triangle 1
-            vertices.extend([x+1, y, z, *normal, *color])
-            vertices.extend([x+1, y+1, z, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-            # Triangle 2
-            vertices.extend([x+1, y, z, *normal, *color])
-            vertices.extend([x+1, y+1, z+1, *normal, *color])
-            vertices.extend([x+1, y, z+1, *normal, *color])
-        else:  # left
-            normal = [-1, 0, 0]
-            # Triangle 1
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x, y+1, z+1, *normal, *color])
-            vertices.extend([x, y+1, z, *normal, *color])
-            # Triangle 2
-            vertices.extend([x, y, z, *normal, *color])
-            vertices.extend([x, y, z+1, *normal, *color])
-            vertices.extend([x, y+1, z+1, *normal, *color])
-    
-    def build_mesh(self):
-        """Build the mesh for this chunk"""
+    def generate_mesh_data(self):
+        """
+        Generate vertex and index data for the chunk mesh using greedy meshing.
+        This method is thread-safe as it does not involve any OpenGL calls.
+        """
         from config.settings import BLOCK_COLORS
 
-        # FIX: Early return if OpenGL context is not ready
-        try:
-            # Test if we can generate arrays
-            if self.vao is None:
-                test_vao = glGenVertexArrays(1)
-                if test_vao == 0:
-                    print(f"Warning: Cannot create VAO for chunk ({self.x}, {self.z}) - OpenGL not ready")
-                    return
-                # Delete test VAO
-                glDeleteVertexArrays(1, [test_vao])
-        except Exception as e:
-            print(f"Warning: OpenGL not ready for chunk ({self.x}, {self.z}): {e}")
-            return
-
         vertices = []
-        
-        for x in range(CHUNK_SIZE):
-            for y in range(64):
-                for z in range(CHUNK_SIZE):
-                    if self.blocks[x, y, z] == Block.AIR:
-                        continue
+        indices = []
+        vertex_map = {}
+        dims = [CHUNK_SIZE, 64, CHUNK_SIZE]
+
+        for axis in range(3):
+            for direction in [1, -1]:
+                u_axis, v_axis = (axis + 1) % 3, (axis + 2) % 3
+                normal = [0, 0, 0]
+                normal[axis] = direction
+                mask_dims = [dims[u_axis], dims[v_axis]]
+                mask = np.zeros(mask_dims, dtype=np.int32)
+
+                for slice_idx in range(dims[axis]):
+                    mask.fill(0)
+                    for u in range(mask_dims[0]):
+                        for v in range(mask_dims[1]):
+                            pos = [0, 0, 0]
+                            pos[axis], pos[u_axis], pos[v_axis] = slice_idx, u, v
+                            block_type = self.blocks[pos[0], pos[1], pos[2]]
+                            if block_type == Block.AIR: continue
+
+                            adj_pos = pos.copy(); adj_pos[axis] += direction
+                            is_face_visible = not (0 <= adj_pos[0] < dims[0] and 0 <= adj_pos[1] < dims[1] and 0 <= adj_pos[2] < dims[2]) or \
+                                              self.blocks[adj_pos[0], adj_pos[1], adj_pos[2]] == Block.AIR
+                            if is_face_visible: mask[u, v] = block_type
                     
-                    block_type = self.blocks[x, y, z]
-                    color = BLOCK_COLORS[block_type]
-                    world_x = self.x * CHUNK_SIZE + x
-                    world_z = self.z * CHUNK_SIZE + z
-                    
-                    # Check each face for visibility and add vertices
-                    # Top face (y+1)
-                    if y == 64 - 1 or self.blocks[x, y + 1, z] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'top', color)
-                    
-                    # Bottom face (y-1)
-                    if y == 0 or self.blocks[x, y - 1, z] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'bottom', color * 0.5)
-                    
-                    # Front face (z+1)
-                    if z == CHUNK_SIZE - 1 or self.blocks[x, y, z + 1] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'front', color * 0.8)
-                    
-                    # Back face (z-1)
-                    if z == 0 or self.blocks[x, y, z - 1] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'back', color * 0.8)
-                    
-                    # Right face (x+1)
-                    if x == CHUNK_SIZE - 1 or self.blocks[x + 1, y, z] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'right', color * 0.9)
-                    
-                    # Left face (x-1)
-                    if x == 0 or self.blocks[x - 1, y, z] == Block.AIR:
-                        self.add_face(vertices, world_x, y, world_z, 'left', color * 0.9)
-        
-        if not vertices:
-            self.vertex_count = 0
-            self.needs_update = False  # FIX: Mark as updated even if empty
-            return
-        
-        # Convert to numpy array
-        vertex_data = np.array(vertices, dtype=np.float32)
-        self.vertex_count = len(vertices) // 9  # Number of vertices (9 floats per vertex)
-        
-        # Create VAO and VBO
-        if self.vao is None:
-            self.vao = glGenVertexArrays(1)
-            self.vbo = glGenBuffers(1)
-        
-        # Bind VAO
-        glBindVertexArray(self.vao)
-        
-        # Bind and upload vertex data
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        glBufferData(GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, GL_STATIC_DRAW)
-        
-        # Position attribute (location 0)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(0))
-        glEnableVertexAttribArray(0)
-        
-        # Normal attribute (location 1)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(3 * 4))
-        glEnableVertexAttribArray(1)
-        
-        # Color attribute (location 2)
-        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9 * 4, ctypes.c_void_p(6 * 4))
-        glEnableVertexAttribArray(2)
-        
-        # Unbind
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
-        glBindVertexArray(0)
+                    for u_start in range(mask_dims[0]):
+                        for v_start in range(mask_dims[1]):
+                            block_type = mask[u_start, v_start]
+                            if not block_type: continue
+
+                            width = 1
+                            while u_start + width < mask_dims[0] and mask[u_start + width, v_start] == block_type:
+                                width += 1
+
+                            height = 1
+                            done = False
+                            while v_start + height < mask_dims[1]:
+                                for i in range(width):
+                                    if mask[u_start + i, v_start + height] != block_type:
+                                        done = True; break
+                                if done: break
+                                height += 1
+
+                            p = [0,0,0]; p[axis] = slice_idx + (1 if direction == 1 else 0)
+                            p[u_axis], p[v_axis] = u_start, v_start; v1 = p.copy()
+                            p[u_axis] += width; v2 = p.copy()
+                            p[v_axis] += height; v3 = p.copy()
+                            p[u_axis] -= width; v4 = p.copy()
+
+                            quad_verts = [v1, v2, v3, v4]
+                            if direction == -1: quad_verts = [quad_verts[0], quad_verts[3], quad_verts[2], quad_verts[1]]
+
+                            color = BLOCK_COLORS[block_type]
+                            if normal[1] == -1: color *= 0.5
+                            elif normal[2] != 0: color *= 0.8
+                            elif normal[0] != 0: color *= 0.9
+
+                            quad_indices = []
+                            for vert_local in quad_verts:
+                                vert_world = (self.x * CHUNK_SIZE + vert_local[0], vert_local[1], self.z * CHUNK_SIZE + vert_local[2])
+                                key = (vert_world, tuple(normal))
+                                if key not in vertex_map:
+                                    vertex_map[key] = len(vertices)
+                                    vertices.extend([*vert_world, *normal, *color])
+                                quad_indices.append(vertex_map[key])
+
+                            indices.extend([quad_indices[0], quad_indices[1], quad_indices[2], quad_indices[0], quad_indices[2], quad_indices[3]])
+                            mask[u_start:u_start+width, v_start:v_start+height] = 0
         
         self.needs_update = False
-        self.mesh_build_queued = False  # FIX: Clear queued flag
-    
-    def render(self):
-        """FIX: Render this chunk without building mesh synchronously"""
-        # FIX: Don't build mesh during render - this should be done by WorldManager
-        # if self.needs_update:
-        #     self.build_mesh()  # REMOVED - This causes frame drops!
+        if not vertices:
+            return None
         
-        # Only render if we have a built mesh
-        if self.vertex_count > 0 and self.vao is not None:
-            glBindVertexArray(self.vao)
-            glDrawArrays(GL_TRIANGLES, 0, self.vertex_count)  # vertex_count is already the number of vertices
-            glBindVertexArray(0)
-        # Debug: print if chunk needs update but hasn't been built
-        elif self.needs_update and not hasattr(self, '_warned_needs_update'):
-            print(f"Info: Chunk ({self.x}, {self.z}) needs mesh build")
-            self._warned_needs_update = True
+        return (np.array(vertices, dtype=np.float32), np.array(indices, dtype=np.uint32))
+
     
     def cleanup(self):
-        """Clean up OpenGL resources"""
-        if self.vao is not None:
-            try:
-                glDeleteVertexArrays(1, [self.vao])
-                glDeleteBuffers(1, [self.vbo])
-            except Exception as e:
-                print(f"Warning: Error cleaning up chunk ({self.x}, {self.z}): {e}")
-            finally:
-                self.vao = None
-                self.vbo = None
-                self.vertex_count = 0
+        """Chunks no longer hold GPU resources, so cleanup is simplified."""
+        self.mesh_data = None

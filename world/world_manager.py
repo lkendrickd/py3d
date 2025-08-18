@@ -34,15 +34,13 @@ class WorldManager:
         
         # Performance tracking
         self.chunks_generated_this_frame = 0
-        self.max_chunks_per_frame = 3  # FIX: Increased from 1
+        self.max_chunks_per_frame = 1  # Quick Win: Reduce from 3
         self.frame_budget_ms = 3.0  # FIX: Increased from 2ms
         self.last_process_time = 0
 
         # Deferred operations queues
         self.chunks_to_cleanup = []  # FIX: Use list for batch cleanup
-        self.chunks_to_build_mesh = queue.Queue()  # Chunks needing mesh building
         self.max_cleanups_per_frame = 5  # FIX: Increased
-        self.max_mesh_builds_per_frame = 8  # FIX: Significantly increased from 2
 
         # FIX: Track camera direction for prioritization
         self.last_camera_direction = np.array([0, 0, -1], dtype=np.float32)
@@ -69,39 +67,32 @@ class WorldManager:
         print(f"Chunk generation threads started successfully")
     
     def _chunk_generation_worker(self):
-        """Worker thread for generating chunks in the background"""
+        """Worker thread for generating chunk terrain and mesh data in the background."""
         while not self.stop_generation:
             chunk_coords = None
             try:
-                # Try priority queue first, then regular queue
                 if self.use_priority_queue:
                     try:
                         priority, chunk_coords = self.priority_queue.get(timeout=0.05)
                     except queue.Empty:
-                        try:
-                            chunk_coords = self.chunk_queue.get(timeout=0.05)
-                        except queue.Empty:
-                            continue
+                        chunk_coords = self.chunk_queue.get(timeout=0.05)
                 else:
                     chunk_coords = self.chunk_queue.get(timeout=0.1)
                 
                 chunk_x, chunk_z = chunk_coords
-                
-                # Skip if already exists (race condition check)
                 if chunk_coords in self.chunks:
                     self.generating_chunks.discard(chunk_coords)
                     continue
 
-                # Generate the chunk (this is the expensive operation)
                 chunk = Chunk(chunk_x, chunk_z)
-                chunk.needs_update = True
+                mesh_data = chunk.generate_mesh_data() # This is the CPU-intensive part
                 
-                # Put completed chunk in the completed queue
-                self.completed_chunks.put((chunk_coords, chunk))
+                self.completed_chunks.put((chunk_coords, chunk, mesh_data))
                 
-                # Remove from generating set
                 self.generating_chunks.discard(chunk_coords)
                 self.generation_stats['total_generated'] += 1
+                if mesh_data:
+                    self.generation_stats['meshes_built'] += 1
                 
             except queue.Empty:
                 continue
@@ -111,39 +102,22 @@ class WorldManager:
                     self.generating_chunks.discard(chunk_coords)
     
     def process_completed_chunks(self):
-        """Process completed chunks from the generation threads with time budget"""
-        start_time = time.time() * 1000  # Convert to milliseconds
-        
+        """Processes completed chunks, storing their mesh data for the renderer."""
+        start_time = time.time() * 1000
         chunks_added = 0
-        max_chunks = self.max_chunks_per_frame
         
-        # Process chunks but respect time budget
-        while chunks_added < max_chunks:
-            # Check if we've exceeded our time budget
-            current_time = time.time() * 1000
-            if current_time - start_time > self.frame_budget_ms:
+        while chunks_added < self.max_chunks_per_frame:
+            if time.time() * 1000 - start_time > self.frame_budget_ms:
                 break
             
             try:
-                chunk_coords, chunk = self.completed_chunks.get_nowait()
+                chunk_coords, chunk, mesh_data = self.completed_chunks.get_nowait()
 
-                # FIX: Check if we're at max capacity
                 if len(self.chunks) >= self.max_chunks:
-                    # Force cleanup of furthest chunks
                     self.force_cleanup_furthest_chunks(5)
                 
                 self.chunks[chunk_coords] = chunk
-                
-                # Queue mesh building with priority for chunks in view direction
-                if chunk_coords in self.chunks_in_view_direction:
-                    # Put at front of queue (hacky but works)
-                    temp_queue = queue.Queue()
-                    temp_queue.put(chunk)
-                    while not self.chunks_to_build_mesh.empty():
-                        temp_queue.put(self.chunks_to_build_mesh.get())
-                    self.chunks_to_build_mesh = temp_queue
-                else:
-                    self.chunks_to_build_mesh.put(chunk)
+                chunk.mesh_data = mesh_data # Store mesh data on the chunk
 
                 chunks_added += 1
                 self.chunks_generated_this_frame += 1
@@ -153,30 +127,6 @@ class WorldManager:
         
         self.last_process_time = time.time() * 1000 - start_time
         return chunks_added
-
-    def process_mesh_builds(self):
-        """Process mesh builds more aggressively"""
-        builds_processed = 0
-        max_builds = self.max_mesh_builds_per_frame
-        
-        start_time = time.time() * 1000
-        time_budget = 5.0  # FIX: Increased budget for mesh building
-        
-        while builds_processed < max_builds:
-            # Check time budget
-            if time.time() * 1000 - start_time > time_budget:
-                break
-
-            try:
-                chunk = self.chunks_to_build_mesh.get_nowait()
-                if chunk.needs_update:
-                    chunk.build_mesh()
-                    self.generation_stats['meshes_built'] += 1
-                builds_processed += 1
-            except queue.Empty:
-                break
-
-        return builds_processed
 
     def process_chunk_cleanups(self):
         """Process chunk cleanups in batches"""
@@ -303,11 +253,13 @@ class WorldManager:
                 key = (chunk_x, chunk_z)
                 
                 if key not in self.chunks:
-                    # Load these initial chunks synchronously for immediate gameplay
+                    # Load and build these initial chunks synchronously for immediate gameplay
                     chunk = Chunk(chunk_x, chunk_z)
+                    chunk.mesh_data = chunk.generate_mesh_data()
                     self.chunks[key] = chunk
-                    self.chunks_to_build_mesh.put(chunk)
                     chunks_loaded += 1
+                    if chunk.mesh_data:
+                        self.generation_stats['meshes_built'] += 1
         
         print(f"Phase 1 complete: {chunks_loaded} immediate chunks loaded")
         
@@ -370,9 +322,8 @@ class WorldManager:
         
         # Process deferred operations
         cleanups = self.process_chunk_cleanups()
-        mesh_builds = self.process_mesh_builds()
 
-        # Process completed chunks
+        # Process completed chunks (which includes mesh uploading)
         completed = self.process_completed_chunks()
         
         # Get player's current chunk
@@ -444,37 +395,92 @@ class WorldManager:
                 over_limit = len(self.chunks) - self.max_chunks
                 self.force_cleanup_furthest_chunks(over_limit + 10)
             
-            print(f"Chunks: {len(self.chunks)} loaded, {len(self.generating_chunks)} generating, "
-                  f"{self.chunks_to_build_mesh.qsize()} awaiting mesh")
+            print(f"Chunks: {len(self.chunks)} loaded, {len(self.generating_chunks)} generating")
 
         # Always show stats periodically
-        if completed > 0 or mesh_builds > 0 or cleanups > 0:
+        if completed > 0 or cleanups > 0:
             if completed > 0:
-                print(f"Processed {completed} generated chunks")
-            if mesh_builds > 0:
-                print(f"Built {mesh_builds} chunk meshes")
+                print(f"Processed {completed} generated chunks (mesh uploaded)")
             if cleanups > 0:
                 print(f"Cleaned {cleanups} chunks")
     
-    def get_visible_chunks(self, camera_position):
-        """Get chunks that should be rendered with basic frustum culling"""
+    def get_visible_chunks(self, camera, projection_matrix):
+        """Get chunks that are visible to the camera using frustum culling."""
+        # First, get all potentially visible chunks by distance
+        camera_position = camera.position
         player_chunk_x, player_chunk_z = self.get_chunk_coords(camera_position[0], camera_position[2])
         
-        visible_chunks = []
+        nearby_chunks = []
         for (chunk_x, chunk_z), chunk in self.chunks.items():
-            # Distance check
             distance = max(abs(chunk_x - player_chunk_x), abs(chunk_z - player_chunk_z))
             if distance <= RENDER_DISTANCE:
-                # Only add chunks that have their mesh built
-                if not chunk.needs_update and chunk.vertex_count > 0:
-                    visible_chunks.append(chunk)
+                # Chunk is ready to be rendered if it's not marked for update and has mesh data
+                if not chunk.needs_update and chunk.mesh_data:
+                    nearby_chunks.append(chunk)
 
-        # FIX: Sort by distance so closer chunks render first (better for depth testing)
+        # Extract frustum planes
+        view_matrix = camera.get_view_matrix()
+        frustum_planes = self._extract_frustum_planes(view_matrix, projection_matrix)
+
+        # Cull chunks that are outside the frustum
+        visible_chunks = []
+        for chunk in nearby_chunks:
+            aabb_min, aabb_max = self._get_chunk_bounds(chunk)
+            if self._aabb_in_frustum(aabb_min, aabb_max, frustum_planes):
+                visible_chunks.append(chunk)
+
+        # Sort by distance so closer chunks render first
         visible_chunks.sort(key=lambda c:
             max(abs(c.x - player_chunk_x), abs(c.z - player_chunk_z))
         )
         
         return visible_chunks
+
+    def _extract_frustum_planes(self, view_matrix, projection_matrix):
+        """Extracts the 6 planes of the frustum from the view-projection matrix."""
+        clip_matrix = np.dot(view_matrix.T, projection_matrix.T).T
+
+        planes = np.empty((6, 4))
+        planes[0] = clip_matrix[3] + clip_matrix[0] # Left
+        planes[1] = clip_matrix[3] - clip_matrix[0] # Right
+        planes[2] = clip_matrix[3] + clip_matrix[1] # Bottom
+        planes[3] = clip_matrix[3] - clip_matrix[1] # Top
+        planes[4] = clip_matrix[3] + clip_matrix[2] # Near
+        planes[5] = clip_matrix[3] - clip_matrix[2] # Far
+
+        # Normalize the planes
+        for i in range(6):
+            magnitude = np.linalg.norm(planes[i, :3])
+            if magnitude > 0:
+                planes[i] /= magnitude
+
+        return planes
+
+    def _get_chunk_bounds(self, chunk):
+        """Returns the AABB (min and max corners) of a chunk in world coordinates."""
+        min_x = chunk.x * CHUNK_SIZE
+        min_y = 0
+        min_z = chunk.z * CHUNK_SIZE
+        max_x = min_x + CHUNK_SIZE
+        max_y = 64 # Max build height
+        max_z = min_z + CHUNK_SIZE
+        return np.array([min_x, min_y, min_z]), np.array([max_x, max_y, max_z])
+
+    def _aabb_in_frustum(self, aabb_min, aabb_max, frustum_planes):
+        """
+        Performs an optimized Axis-Aligned Bounding Box vs. Frustum intersection test.
+        """
+        for plane in frustum_planes:
+            # Find the corner of the AABB that is furthest in the direction of the plane's normal
+            p_corner = np.zeros(3)
+            p_corner[0] = aabb_max[0] if plane[0] > 0 else aabb_min[0]
+            p_corner[1] = aabb_max[1] if plane[1] > 0 else aabb_min[1]
+            p_corner[2] = aabb_max[2] if plane[2] > 0 else aabb_min[2]
+
+            # If this corner is behind the plane, the entire box is outside
+            if np.dot(plane[:3], p_corner) + plane[3] < 0:
+                return False
+        return True
     
     def cleanup(self):
         """Clean up all chunks and stop generation threads"""
