@@ -34,7 +34,7 @@ class WorldManager:
         
         # Performance tracking
         self.chunks_generated_this_frame = 0
-        self.max_chunks_per_frame = 3  # FIX: Increased from 1
+        self.max_chunks_per_frame = 1  # Reduce from 3
         self.frame_budget_ms = 3.0  # FIX: Increased from 2ms
         self.last_process_time = 0
 
@@ -42,7 +42,7 @@ class WorldManager:
         self.chunks_to_cleanup = []  # FIX: Use list for batch cleanup
         self.chunks_to_build_mesh = queue.Queue()  # Chunks needing mesh building
         self.max_cleanups_per_frame = 5  # FIX: Increased
-        self.max_mesh_builds_per_frame = 8  # FIX: Significantly increased from 2
+        self.max_mesh_builds_per_frame = 3  # Reduce from 8
 
         # FIX: Track camera direction for prioritization
         self.last_camera_direction = np.array([0, 0, -1], dtype=np.float32)

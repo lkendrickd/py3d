@@ -123,28 +123,8 @@ def main():
         keys = pygame.key.get_pressed()
         camera.process_keyboard(keys, dt)
         
-        # FIX: Adaptive update frequency based on performance and chunk status
-        update_interval = 10  # Default
-
-        if low_fps_counter > 10:  # Consistently low FPS
-            update_interval = 30
-            world_manager.max_chunks_per_frame = 1
-            world_manager.max_mesh_builds_per_frame = 2
-        elif avg_fps < 45:
-            update_interval = 20
-            world_manager.max_chunks_per_frame = 2
-            world_manager.max_mesh_builds_per_frame = 4
-        elif avg_fps > 55:
-            update_interval = 5
-            world_manager.max_chunks_per_frame = 4
-            world_manager.max_mesh_builds_per_frame = 10
-        else:
-            update_interval = 10
-            world_manager.max_chunks_per_frame = 3
-            world_manager.max_mesh_builds_per_frame = 8
-        
-        # FIX: Update world with camera direction for better prioritization
-        if frame_count % update_interval == 0:
+        # In world_manager.py, reduce aggressive updates
+        if frame_count % 30 == 0:  # Update every 30 frames instead of 10
             world_manager.update(camera.position, camera.front)
         
         # FIX: More aggressive chunk management when chunk count changes
@@ -187,15 +167,8 @@ def main():
         world_manager.process_completed_chunks()
         world_manager.process_mesh_builds()
 
-        # FIX: Adaptive rendering based on performance
-        if low_fps_counter > 10:
-            max_chunks_to_render = min(len(visible_chunks), 150)  # Emergency mode
-        elif avg_fps < 30:
-            max_chunks_to_render = min(len(visible_chunks), 200)
-        elif avg_fps < 45:
-            max_chunks_to_render = min(len(visible_chunks), 300)
-        else:
-            max_chunks_to_render = len(visible_chunks)  # Render all visible
+        # In main.py, add emergency FPS protection
+        max_chunks_to_render = min(len(visible_chunks), 100)  # Emergency limit
 
         for i, chunk in enumerate(visible_chunks):
             if i >= max_chunks_to_render:
