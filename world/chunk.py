@@ -216,13 +216,14 @@ class Chunk:
 
             c1, c2, c3, c4 = p0, p0 + dv, p0 + dv + du, p0 + du
 
+            # Add two triangles with Counter-Clockwise (CCW) winding order
             vertices.extend([*c1, *normal, *color])
-            vertices.extend([*c3, *normal, *color])
             vertices.extend([*c2, *normal, *color])
+            vertices.extend([*c3, *normal, *color])
 
             vertices.extend([*c1, *normal, *color])
-            vertices.extend([*c4, *normal, *color])
             vertices.extend([*c3, *normal, *color])
+            vertices.extend([*c4, *normal, *color])
 
         vertex_data = np.array(vertices, dtype=np.float32)
         self.vertex_count = len(vertex_data) // 9
